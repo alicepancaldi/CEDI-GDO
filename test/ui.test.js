@@ -156,6 +156,7 @@ test('flusso completo: login, sedi, PV, import, distanze, ottimo, estrazioni', a
     assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '003').geocodifica, 'manuale');
     $('btnNuovoPV').click(); p.set('pvCodice', '004'); p.set('pvIndirizzo', 'Via Ferrara 7, Ferrara'); p.set('pvPallet', 'tanti'); p.set('pvConsegne', '2');
     $('btnSalvaPV').click(); await p.attendiMsg(/numerico non valido per pallet/);
+    p.set('pvPallet', ''); $('btnSalvaPV').click(); await p.attendiMsg(/sia i pallet sia le consegne/);
     p.set('pvPallet', '20'); p.set('pvIndirizzo', 'Indirizzo inventato'); $('btnSalvaPV').click(); await p.attendiMsg(/Indirizzo non trovato/);
     assert.ok(!S.db.punti_vendita.some(x => x.codice === '004'));
   });
@@ -435,6 +436,12 @@ test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione
   assert.strictEqual(S.db.viaggi.length, 2); assert.strictEqual(S.db.viaggi_clienti.length, 3);
   assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '500').nome, 'ESISTENTE');
   assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '501').indirizzo, 'Via Carpi 1, Carpi (MO)');
+  // PV arrivato dai viaggi: si salva dalla maschera senza pallet e consegne
+  p.tab('pv'); p.set('pvCerca', '501'); $('pvCerca').dispatchEvent(new w.Event('change'));
+  await p.finche(() => p.libero() && /^501/.test(d.querySelector('#confronto h2').textContent), 'PV 501');
+  p.set('pvCoord', '44.7842, 10.8851'); $('btnSalvaPV').click(); await p.attendiMsg(/501 salvato/);
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '501').pallet_settimana, null);
+  p.tab('conf');
   const tuttoDb = JSON.stringify(S.db);
   ['MARIO', 'ROSSI', '3331234567', 'AB123CD'].forEach(x => assert.ok(!tuttoDb.includes(x), 'dato personale nel database: ' + x));
   // reimport dello stesso periodo: sostituisce, non duplica

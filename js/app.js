@@ -399,10 +399,12 @@
       if (!codice) throw new Error('Inserire il codice del punto vendita.');
       if (!indirizzo) throw new Error('Inserire l\'indirizzo del punto vendita.');
       var esistente = trovaPV(codice);
-      var conCarichi = esistente && esistente.haCarichi;
+      var conCarichi = !!(esistente && esistente.haCarichi);
       var pTxt = $('pvPallet').value.trim(), cTxt = $('pvConsegne').value.trim();
-      var pallet = conCarichi && pTxt === '' ? null : C.num(pTxt, 'pallet/settimana');
-      var consegne = conCarichi && cTxt === '' ? null : C.num(cTxt, 'consegne/settimana');
+      // pallet e consegne a settimana sono facoltativi: servono solo senza viaggi reali né carichi giornalieri
+      var pallet = pTxt === '' ? null : C.num(pTxt, 'pallet/settimana');
+      var consegne = cTxt === '' ? null : C.num(cTxt, 'consegne/settimana');
+      if ((pallet === null) !== (consegne === null)) throw new Error('Indicare sia i pallet sia le consegne a settimana, oppure lasciarli vuoti entrambi.');
       if (pallet !== null && !(pallet > 0)) throw new Error('I pallet/settimana devono essere maggiori di zero.');
       if (consegne !== null && !(consegne > 0)) throw new Error('Le consegne/settimana devono essere maggiori di zero.');
       if (esistente && (!pvCorrente || pvCorrente.codice !== codice) && !window.confirm('Il codice ' + codice + ' esiste già. Sovrascrivere i suoi dati?')) throw new Error('Salvataggio annullato.');
@@ -755,7 +757,7 @@
     if (window.Worker && !CFG.SENZA_WORKER) {
       return await new Promise(function (ok, ko) {
         var w;
-        try { w = new Worker('js/lettore-worker.js?v=4'); } catch (e) { ko(e); return; }
+        try { w = new Worker('js/lettore-worker.js?v=5'); } catch (e) { ko(e); return; }
         w.onmessage = function (e) { w.terminate(); if (e.data.ok) ok(e.data.risultato); else ko(new Error(e.data.errore)); };
         w.onerror = function (e) { w.terminate(); ko(new Error('Lettura del file non riuscita' + (e && e.message ? ': ' + e.message : ''))); };
         w.postMessage({ buffer: buf, tipo: tipo || '' }, [buf]);
