@@ -385,11 +385,17 @@ test('posizione fuori dal comune indicato: si usa il centro del comune; verifica
   S.db.distanze.push({ sede: 'ATTUALE', pv: '999', km: 1000, minuti: 900, chiave: 'x' });
   $('btnRicarica').click(); await p.attendiMsg(/Dati aggiornati/);
   p.tab('riep'); $('btnVerificaPos').click();
-  await p.attendiMsg(/1 posizioni corrette/);
+  await p.attendiMsg(/posizioni aggiornate/);
   assert.match($('msg').textContent, /999 X/);
   const c = S.db.punti_vendita.find(x => x.codice === '999');
   assert.deepStrictEqual([c.lat, c.geocodifica], [41.0866, 'fuori_comune']);
   assert.ok(!S.db.distanze.some(x => x.pv === '999'), 'distanze vecchie eliminate');
-  $('btnVerificaPos').click(); await p.attendiMsg(/Nessuna posizione fuori/);
+  $('btnVerificaPos').click(); await p.attendiMsg(/Tutte le posizioni sono coerenti/);
+  // comune cercato e trovato in un'altra provincia: posizione da correggere a mano, nessuna "correzione" sbagliata
+  p.tab('pv'); $('btnNuovoPV').click();
+  p.set('pvCodice', '76702'); p.set('pvIndirizzo', 'Via Napoli 3, Santo Spirito (BA)'); p.set('pvPallet', '10'); p.set('pvConsegne', '6');
+  $('btnSalvaPV').click(); await p.attendiMsg(/76702 salvato/);
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '76702').geocodifica, 'provincia_errata');
+  assert.match($('msg').textContent, /altra provincia: inserire le coordinate/);
   assert.deepStrictEqual(p.errori, []);
 });

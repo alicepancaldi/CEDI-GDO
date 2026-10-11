@@ -19,8 +19,10 @@ const LUOGHI = {
   'Via Carpi 1, 41012 Carpi (MO)': [44.7842, 10.8851, 'address'],
   'Via Carpi 1, Carpi (MO)': [44.7842, 10.8851, 'address'],
   'Via Modena 10, Modena (MO)': [44.6471, 10.9252, 'address'],
-  'Via San Nicola 7, Torre a Mare (BA)': [40.9044, 8.8720, 'address'],
-  'Torre a Mare (BA)': [41.0866, 16.9967, 'locality'],
+  'Via San Nicola 7, Torre a Mare (BA)': [40.9044, 8.8720, 'address', 'SS'],
+  'Torre a Mare (BA)': [41.0866, 16.9967, 'locality', 'BA'],
+  'Via Napoli 3, Santo Spirito (BA)': [43.767, 11.247, 'street', 'FI'],
+  'Santo Spirito (BA)': [43.768, 11.248, 'locality', 'FI'],
   'Via Sassuolo 2, 41049 Sassuolo (MO)': [44.5446, 10.7836, 'street'],
   'Corso Vignola, 41058 Vignola (MO)': [44.4810, 11.0012, 'locality'],
   'Castel San Pietro Terme': [44.3976, 11.5876, 'locality'],
@@ -56,7 +58,7 @@ function creaOrsFinto(opz = {}) {
       if (u.searchParams.get('api_key') !== 'CHIAVE-TEST') return json(403, { error: 'Access to this API has been disallowed' });
       if (u.searchParams.get('boundary.country') !== 'IT') return json(400, { error: 'paese mancante' });
       const k = LUOGHI[u.searchParams.get('text')];
-      return json(200, { type: 'FeatureCollection', features: k ? [{ geometry: { type: 'Point', coordinates: [k[1], k[0]] }, properties: { label: u.searchParams.get('text') + ', Italia', layer: k[2], confidence: k[2] === 'address' ? 1 : 0.6 } }] : [] });
+      return json(200, { type: 'FeatureCollection', features: k ? [{ geometry: { type: 'Point', coordinates: [k[1], k[0]] }, properties: { label: u.searchParams.get('text') + (k && k[3] ? ', ' + k[3] : '') + ', Italia', layer: k[2], confidence: k[2] === 'address' ? 1 : 0.6 } }] : [] });
     }
     if (percorso === 'GR') {
       st.reverse++;

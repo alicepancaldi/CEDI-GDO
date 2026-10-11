@@ -45,7 +45,8 @@
     calcolato: ['punto calcolato', 'ok'], street: ['via trovata, numero civico no', 'ok'],
     neighbourhood: ['solo quartiere: verificare', 'warn'], postalcode: ['solo CAP: verificare', 'warn'],
     locality: ['solo comune: verificare', 'warn'], localadmin: ['solo comune: verificare', 'warn'],
-    borough: ['solo frazione: verificare', 'warn'], fuori_comune: ['via trovata fuori comune: usato il centro del comune, verificare', 'warn'], county: ['solo provincia: da correggere', 'err'],
+    borough: ['solo frazione: verificare', 'warn'], fuori_comune: ['via trovata fuori comune: usato il centro del comune, verificare', 'warn'],
+    provincia_errata: ['trovato in un\'altra provincia: inserire le coordinate', 'err'], county: ['solo provincia: da correggere', 'err'],
     macrocounty: ['solo provincia: da correggere', 'err'], region: ['solo regione: da correggere', 'err'], country: ['solo nazione: da correggere', 'err']
   };
   function precisione(g) { return PRECISIONE[g] ? { testo: PRECISIONE[g][0], livello: PRECISIONE[g][1] } : { testo: g ? 'precisione: ' + g : 'precisione non indicata', livello: g ? 'warn' : 'ok' }; }
@@ -165,12 +166,26 @@
     if (!(comune in cacheComuni)) cacheComuni[comune] = await ors('geocodifica', { testo: comune });
     return cacheComuni[comune];
   }
+  /**
+   * Controllo di coerenza della posizione trovata con la provincia e il comune dell'indirizzo:
+   * - provincia diversa da quella indicata: si cerca il comune; se anche il comune non è nella provincia, la posizione è da correggere a mano;
+   * - stessa provincia ma oltre 25 km dal centro del comune: si usa il centro del comune.
+   */
   async function controllaComune(pos, indirizzo) {
-    var comune = C.comuneDaIndirizzo(indirizzo);
-    if (!comune || ['locality', 'localadmin', 'county', 'region', 'country', 'macrocounty', 'fuori_comune'].indexOf(pos.geocodifica) >= 0) return pos;
+    var comune = C.comuneDaIndirizzo(indirizzo), prov = C.provinciaDaIndirizzo(indirizzo);
+    if (!comune) return pos;
+    var provPos = C.provinciaDaEtichetta(pos.etichetta);
     var c = await centroComune(comune);
-    if (!c || C.distanzaKm(pos, c) <= DISTANZA_MAX_COMUNE_KM) return pos;
-    return { lat: c.lat, lng: c.lng, geocodifica: 'fuori_comune', etichetta: c.indirizzo + ' (il punto trovato per la via era a ' + Math.round(C.distanzaKm(pos, c)) + ' km: usato il centro del comune)' };
+    var cValido = c && (!prov || C.provinciaDaEtichetta(c.indirizzo) === prov);
+    if (prov && provPos && provPos !== prov) {
+      if (cValido) return { lat: c.lat, lng: c.lng, geocodifica: 'fuori_comune', etichetta: c.indirizzo + ' (per la via era stato trovato un punto in provincia di ' + provPos + ': usato il centro del comune)' };
+      return { lat: pos.lat, lng: pos.lng, geocodifica: 'provincia_errata', etichetta: pos.etichetta + ' (provincia diversa da ' + prov + ': inserire le coordinate)' };
+    }
+    if (['locality', 'localadmin', 'borough', 'neighbourhood', 'postalcode'].indexOf(pos.geocodifica) >= 0) return pos;
+    if (cValido && C.distanzaKm(pos, c) > DISTANZA_MAX_COMUNE_KM) {
+      return { lat: c.lat, lng: c.lng, geocodifica: 'fuori_comune', etichetta: c.indirizzo + ' (il punto trovato per la via era a ' + Math.round(C.distanzaKm(pos, c)) + ' km: usato il centro del comune)' };
+    }
+    return pos;
   }
 
   /* ============================ distanze ============================ */
@@ -457,17 +472,18 @@
 
   $('btnVerificaPos').addEventListener('click', function () {
     esegui(async function () {
-      var daControllare = S.pv.filter(function (p) { return ['manuale', 'locality', 'localadmin', 'county', 'region', 'country', 'macrocounty', 'fuori_comune'].indexOf(p.geocodifica) < 0; });
-      var corretti = [], n = 0;
+      // geocodifica di nuovo ogni PV (tranne le coordinate inserite a mano) e applica i controlli su provincia e comune
+      var daControllare = S.pv.filter(function (p) { return p.geocodifica !== 'manuale'; });
+      var corretti = [];
       for (var i = 0; i < daControllare.length; i++) {
-        var p = daControllare[i], comune = C.comuneDaIndirizzo(p.indirizzo);
-        if (!comune) continue;
+        var p = daControllare[i];
         $('prog').textContent = 'Verifica posizioni: ' + (i + 1) + ' di ' + daControllare.length;
-        if (!(comune in cacheComuni) && n++ > 0) await pausa(PAUSA_GEOCODIFICA_MS);
-        var nuova = await controllaComune({ lat: p.lat, lng: p.lng, geocodifica: p.geocodifica }, p.indirizzo);
-        if (nuova.geocodifica === 'fuori_comune') {
-          corretti.push(p.codice + ' ' + p.nome + ': ' + nuova.etichetta);
-          p.lat = nuova.lat; p.lng = nuova.lng; p.geocodifica = 'fuori_comune';
+        if (i > 0) await pausa(PAUSA_GEOCODIFICA_MS);
+        var nuova;
+        try { nuova = await posizione(p.indirizzo, '', null); } catch (e) { if (/non raggiungibile|ORS_API_KEY/.test(e.message)) throw e; continue; }
+        if (!vicine(nuova, p) || nuova.geocodifica !== p.geocodifica) {
+          corretti.push(p.codice + ' ' + p.nome + ': ' + precisione(nuova.geocodifica).testo + (nuova.etichetta ? ' — ' + nuova.etichetta : ''));
+          p.lat = nuova.lat; p.lng = nuova.lng; p.geocodifica = nuova.geocodifica;
           await upsert('punti_vendita', [aDbPV(p)], 'codice');
           await elimina('distanze', 'pv', [p.codice]);
           S.dist = S.dist.filter(function (d) { return d.pv !== p.codice; });
@@ -475,7 +491,7 @@
       }
       $('prog').textContent = '';
       disegnaRiepilogo();
-      msg(corretti.length ? corretti.length + ' posizioni corrette (poi premere "Aggiorna distanze"):<br>' + corretti.map(esc).join('<br>') : 'Nessuna posizione fuori dal proprio comune (' + daControllare.length + ' controllate).', corretti.length ? 'warn' : 'ok');
+      msg(corretti.length ? corretti.length + ' posizioni aggiornate (poi premere "Aggiorna distanze"):<br>' + corretti.map(esc).join('<br>') : 'Tutte le posizioni sono coerenti con comune e provincia (' + daControllare.length + ' controllate).', corretti.length ? 'warn' : 'ok');
     }, 'Verifica delle posizioni…').catch(function () { $('prog').textContent = ''; });
   });
 

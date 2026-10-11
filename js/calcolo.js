@@ -277,6 +277,10 @@
     return c && /[A-Za-zÀ-ÿ]/.test(c) && !/^\d/.test(c) ? c : null;
   }
 
+  /** Sigla provincia: dall'indirizzo composto "…, COMUNE (BA)" e dall'etichetta ORS "…, Bari, BA, Italia". */
+  function provinciaDaIndirizzo(ind) { var m = String(ind || '').match(/\(([A-Za-z]{2})\)\s*$/); return m ? m[1].toUpperCase() : null; }
+  function provinciaDaEtichetta(et) { var m = String(et || '').match(/,\s*([A-Z]{2}),\s*Italia\s*$/); return m ? m[1] : null; }
+
   function normReparto(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim() || 'unico'; }
 
   function componiIndirizzo(v) {
@@ -438,6 +442,6 @@
     chiaveCoord: chiaveCoord, metriche: metriche, delta: delta, weiszfeld: weiszfeld, pesiOttimo: pesiOttimo,
     tabella: tabella, riepilogo: riepilogo, estrazione: estrazione, csv: csv, mappaColonne: mappaColonne,
     preparaImport: preparaImport, leggiCSV: leggiCSV, aBlocchi: aBlocchi, arr: arr,
-    volumePV: volumePV, volumi: volumi, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
+    volumePV: volumePV, volumi: volumi, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
   };
 });
