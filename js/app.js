@@ -928,7 +928,7 @@
       } else o = C.weiszfeld(C.pesiOttimo(S.pv, S.P));
       var affinato = null;
       if (conViaggi()) {
-        affinato = await affinaOttimoStrade(o, function (n, v) { $('prog').textContent = 'Affinamento sulle strade vere: ' + v + ' punti valutati, richiesta ' + n; });
+        affinato = await affinaOttimoStrade(o, function (n, v) { $('prog').textContent = 'Affinamento sulle percorrenze reali: ' + v + ' punti valutati, richiesta ' + n; });
         o = { lat: affinato.lat, lng: affinato.lng };
       }
       var ind = null;
@@ -949,7 +949,7 @@
       var es = await calcolaDistanze(coppieMancanti(S.pv).filter(function (c) { return c.sede === 'OTTIMO'; }), function (k, n) { $('prog').textContent = 'Distanze dall\'ottimo: richiesta ' + k + ' di ' + n; });
       $('prog').textContent = '';
       msg('Punto di ottimo calcolato ' + (conViaggi() ? 'sui ' + S.viaggi.length + ' viaggi reali' : 'su ' + S.pv.length + ' punti vendita') + ': ' + esc(ind) + ' (' + esc(coordTesto(o)) + '). ' +
-        (affinato ? 'Affinato sulle distanze stradali reali (' + affinato.valutati + ' punti valutati). ' : '') +
+        (affinato ? 'Affinato sulle percorrenze reali (' + affinato.valutati + ' punti valutati). ' : '') +
         (es.errori.length ? es.errori.length + ' distanze non trovate.' : 'Distanze calcolate: vedere il riepilogo.'), es.errori.length ? 'warn' : 'ok');
     }, 'Calcolo del punto di ottimo…').catch(function () {});
   });
