@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulatore CEDI</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header>
+  <div class="barra">
+    <h1>Simulatore rilocalizzazione CEDI</h1>
+    <div id="utente" hidden><span id="utenteEmail"></span>
+      <button class="link" id="btnRicarica" title="Ricarica i dati condivisi">Ricarica dati</button>
+      <button class="link" id="btnEsci">Esci</button></div>
+  </div>
+  <nav id="nav" hidden>
+    <button data-tab="pv" class="on">Confronto punto vendita</button>
+    <button data-tab="riep">Riepilogo ed estrazione</button>
+    <button data-tab="conf">Configurazione e import</button>
+  </nav>
+</header>
+<div id="msg"></div>
+<main>
+  <!-- LOGIN -->
+  <section id="tab-login" hidden>
+    <div class="card stretta">
+      <h2>Accesso</h2>
+      <form id="formLogin">
+        <label>Email<input id="loginEmail" type="email" autocomplete="username" required></label>
+        <label>Password<input id="loginPwd" type="password" autocomplete="current-password" required></label>
+        <button class="btn" type="submit" id="btnLogin">Entra</button>
+      </form>
+      <p class="muted">Gli accessi sono creati dall'amministratore.</p>
+    </div>
+  </section>
+
+  <!-- MASCHERA 1 -->
+  <section id="tab-pv" hidden>
+    <div class="card">
+      <h2>Punto vendita</h2>
+      <div class="grid">
+        <label class="wide">Cerca punto vendita esistente (codice o nome)
+          <input id="pvCerca" list="pvLista" placeholder="Scrivi per cercare… lascia vuoto per un nuovo PV" autocomplete="off">
+          <datalist id="pvLista"></datalist></label>
+        <div class="azioni-fondo"><button class="btn sec" id="btnNuovoPV" type="button">Nuovo punto vendita</button></div>
+      </div>
+      <div class="grid">
+        <label>Codice *<input id="pvCodice"></label>
+        <label>Nome<input id="pvNome"></label>
+        <label class="wide">Indirizzo *<input id="pvIndirizzo" placeholder="Via, numero, CAP, comune"></label>
+        <label>Pallet / settimana *<input id="pvPallet" inputmode="decimal"></label>
+        <label>Consegne / settimana *<input id="pvConsegne" inputmode="decimal"></label>
+        <label class="wide">Coordinate (facoltative)<input id="pvCoord" placeholder="es. 44.4949, 11.3426 — vuoto = dall'indirizzo"></label>
+      </div>
+      <button class="btn" id="btnSalvaPV">Salva e confronta</button>
+      <button class="btn sec" id="btnEliminaPV">Elimina punto vendita</button>
+    </div>
+    <div class="card" id="confronto"><span class="muted">Inserisci o cerca un punto vendita per vedere il confronto.</span></div>
+  </section>
+
+  <!-- MASCHERA 2 -->
+  <section id="tab-riep" hidden>
+    <div class="card">
+      <h2>Riepilogo per sede</h2>
+      <button class="btn" id="btnDist">Aggiorna distanze</button>
+      <button class="btn sec" id="btnXlsx">Scarica Excel</button>
+      <button class="btn sec" id="btnCsv">Scarica CSV</button>
+      <div id="prog" class="muted"></div>
+    </div>
+    <div class="card" id="riepilogo"></div>
+    <div class="card" id="qualita"></div>
+  </section>
+
+  <!-- CONFIGURAZIONE E IMPORT -->
+  <section id="tab-conf" hidden>
+    <div class="card">
+      <h2>Parametri di costo del vettore</h2>
+      <div class="grid">
+        <label>Tariffa €/km<input id="pEuroKm" inputmode="decimal"></label>
+        <label>Km fatturati
+          <select id="pKmFatt"><option value="AR">Andata e ritorno</option><option value="A">Solo andata</option></select></label>
+        <label>Capacità mezzo standard (pallet)<input id="pCap" inputmode="decimal"></label>
+        <label>Costo fisso per viaggio €<input id="pFisso" inputmode="decimal"></label>
+        <label>Settimane operative / anno<input id="pSett" inputmode="decimal"></label>
+      </div>
+      <button class="btn" id="btnParam">Salva parametri</button>
+    </div>
+    <div class="card">
+      <h2>Sedi</h2>
+      <p class="muted">Capacità mezzo: vuoto = mezzo standard; compilare solo se da quella sede è obbligatorio un mezzo diverso. Coordinate: vuoto = calcolate dall'indirizzo.</p>
+      <div id="sediForm"></div>
+      <div class="sede">
+        <b>Punto di ottimo</b>
+        <span class="muted span3" id="ottimoInfo">Non calcolato</span>
+        <button class="btn" id="btnOttimo">Calcola</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Importa punti vendita da Excel o CSV</h2>
+      <p class="muted">Colonne riconosciute (prima riga = intestazione): codice, nome, indirizzo (oppure indirizzo + CAP + comune + provincia), pallet/settimana, consegne/settimana; facoltative latitudine e longitudine. I PV con lo stesso codice vengono aggiornati.</p>
+      <input type="file" id="fileImport" accept=".xlsx,.csv,.txt">
+      <div id="anteprima"></div>
+    </div>
+  </section>
+</main>
+
+<script src="js/vendor/supabase-2.117.3.js"></script>
+<script src="js/vendor/exceljs-4.4.0.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/calcolo.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,74 @@
+-- Simulatore rilocalizzazione CEDI — schema dati Supabase
+-- Da incollare in Supabase: SQL Editor > New query > Run. Si può rieseguire senza perdere dati.
+
+create table if not exists public.parametri (
+  id                  int primary key default 1 check (id = 1),
+  euro_km             numeric not null default 1.30 check (euro_km > 0),
+  km_fatturati        text    not null default 'AR' check (km_fatturati in ('AR', 'A')),
+  capacita_pallet     numeric not null default 33   check (capacita_pallet > 0),
+  costo_fisso_viaggio numeric not null default 0    check (costo_fisso_viaggio >= 0),
+  settimane_anno      numeric not null default 52   check (settimane_anno > 0 and settimane_anno <= 53),
+  aggiornato_il       timestamptz not null default now()
+);
+insert into public.parametri (id) values (1) on conflict (id) do nothing;
+
+create table if not exists public.sedi (
+  codice         text primary key check (codice in ('ATTUALE', 'OPZ1', 'OPZ2', 'OPZ3', 'OTTIMO')),
+  nome           text not null,
+  indirizzo      text not null default '',
+  lat            double precision,
+  lng            double precision,
+  capacita_mezzo numeric check (capacita_mezzo is null or capacita_mezzo > 0),
+  geocodifica    text not null default '',  -- precisione della posizione: address, street, locality..., manuale, calcolato
+  aggiornato_il  timestamptz not null default now()
+);
+insert into public.sedi (codice, nome) values
+  ('ATTUALE', 'CEDI attuale'), ('OPZ1', 'Opzione 1'), ('OPZ2', 'Opzione 2'),
+  ('OPZ3', 'Opzione 3'), ('OTTIMO', 'Punto di ottimo')
+on conflict (codice) do nothing;
+
+create table if not exists public.punti_vendita (
+  codice             text primary key check (length(trim(codice)) > 0),
+  nome               text not null default '',
+  indirizzo          text not null,
+  lat                double precision not null,
+  lng                double precision not null,
+  pallet_settimana   numeric not null check (pallet_settimana > 0),
+  consegne_settimana numeric not null check (consegne_settimana > 0),
+  geocodifica        text not null default '',  -- precisione della posizione: address, street, locality..., manuale
+  aggiornato_il      timestamptz not null default now()
+);
+
+-- Colonne aggiunte dopo la prima versione (sicuro rieseguire)
+alter table public.sedi          add column if not exists geocodifica text not null default '';
+alter table public.punti_vendita add column if not exists geocodifica text not null default '';
+
+-- Distanze stradali calcolate (cache). "chiave" = coordinate sede+PV: se cambiano, la distanza va ricalcolata.
+create table if not exists public.distanze (
+  sede          text not null references public.sedi(codice) on delete cascade,
+  pv            text not null references public.punti_vendita(codice) on delete cascade on update cascade,
+  km            double precision not null check (km >= 0),
+  minuti        double precision not null check (minuti >= 0),
+  chiave        text not null,
+  aggiornato_il timestamptz not null default now(),
+  primary key (sede, pv)
+);
+
+-- Accesso: solo utenti con login (creati dall'amministratore in Authentication > Users)
+alter table public.parametri     enable row level security;
+alter table public.sedi          enable row level security;
+alter table public.punti_vendita enable row level security;
+alter table public.distanze      enable row level security;
+
+drop policy if exists "utenti autenticati" on public.parametri;
+drop policy if exists "utenti autenticati" on public.sedi;
+drop policy if exists "utenti autenticati" on public.punti_vendita;
+drop policy if exists "utenti autenticati" on public.distanze;
+create policy "utenti autenticati" on public.parametri     for all to authenticated using (true) with check (true);
+create policy "utenti autenticati" on public.sedi          for all to authenticated using (true) with check (true);
+create policy "utenti autenticati" on public.punti_vendita for all to authenticated using (true) with check (true);
+create policy "utenti autenticati" on public.distanze      for all to authenticated using (true) with check (true);
+
+-- Le sedi non si cancellano né si creano dall'app: solo modifica
+revoke insert, delete on public.sedi from authenticated;
+revoke delete, insert on public.parametri from authenticated;

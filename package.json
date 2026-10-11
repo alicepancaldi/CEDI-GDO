@@ -1,0 +1,13 @@
+{
+  "name": "simulatore-cedi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Simulatore rilocalizzazione CEDI: confronto costi di trasporto tra CEDI attuale, opzioni alternative e punto di ottimo",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "exceljs": "4.4.0",
+    "jsdom": "^24.1.0"
+  }
+}
