@@ -3,8 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { creaOrsFinto, caricaFunzioneOrs } = require('./helpers');
 
-async function chiama(gestore, body, metodo = 'POST') {
-  const r = await gestore(new Request('https://x/functions/v1/ors', { method: metodo, body: metodo === 'POST' ? JSON.stringify(body) : undefined }));
+async function chiama(gestore, body, metodo = 'POST', token = 'jwt-valido') {
+  const headers = token ? { Authorization: 'Bearer ' + token } : {};
+  const r = await gestore(new Request('https://x/functions/v1/ors', { method: metodo, headers, body: metodo === 'POST' ? JSON.stringify(body) : undefined }));
   return { status: r.status, cors: r.headers.get('Access-Control-Allow-Origin'), corpo: metodo === 'OPTIONS' ? await r.text() : await r.json() };
 }
 
@@ -68,4 +69,13 @@ test('inversa', async () => {
   const g = caricaFunzioneOrs(creaOrsFinto().fetch);
   const r = await chiama(g, { azione: 'inversa', lat: 44.5, lng: 11.3 });
   assert.match(r.corpo.dati.indirizzo, /Località simulata 44.500/);
+});
+
+test('accesso: token mancante o non valido rifiutato, nessuna chiamata a ORS', async () => {
+  const ors = creaOrsFinto(); const g = caricaFunzioneOrs(ors.fetch);
+  let r = await chiama(g, { azione: 'geocodifica', testo: 'Via Emilia 1, Bologna' }, 'POST', null);
+  assert.match(r.corpo.errore, /Accesso non autorizzato/);
+  r = await chiama(g, { azione: 'geocodifica', testo: 'Via Emilia 1, Bologna' }, 'POST', 'falso');
+  assert.match(r.corpo.errore, /Accesso non autorizzato/);
+  assert.strictEqual(ors.st.geocode, 0);
 });

@@ -1,6 +1,7 @@
+// @ts-nocheck  (codice JavaScript puro, testato anche in Node)
 // Funzione Supabase "ors": tramite verso OpenRouteService.
 // La chiave ORS resta sul server (secret ORS_API_KEY) e non arriva mai al browser.
-// Accetta solo utenti con login (verifica JWT di Supabase attiva per default).
+// Accetta solo utenti con login: il token viene verificato con Supabase Auth (utenteValido).
 //
 // Richieste (POST JSON):
 //   { azione: "geocodifica", testo: "Via Emilia 1, Bologna" }
@@ -100,10 +101,24 @@ async function gestisci(b, chiave) {
   throw new Error("Azione sconosciuta");
 }
 
+/** Verifica che la richiesta venga da un utente con login valido (funziona con chiavi JWT nuove e legacy). */
+async function utenteValido(req) {
+  const auth = req.headers.get("Authorization") || "";
+  if (!/^Bearer\s+\S+/.test(auth)) return false;
+  const base = Deno.env.get("SUPABASE_URL");
+  const apikey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || "";
+  if (!base) return false;
+  const r = await fetch(base + "/auth/v1/user", { headers: { Authorization: auth, apikey } });
+  if (!r.ok) return false;
+  const u = await r.json().catch(() => null);
+  return !!(u && u.id);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return risposta({ ok: false, errore: "Usare POST" });
   try {
+    if (!(await utenteValido(req))) return risposta({ ok: false, errore: "Accesso non autorizzato: effettuare di nuovo il login" });
     const corpo = await req.json();
     const dati = await gestisci(corpo || {}, Deno.env.get("ORS_API_KEY"));
     return risposta({ ok: true, dati });

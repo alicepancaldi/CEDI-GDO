@@ -32,7 +32,7 @@ Le distanze sono stradali reali per mezzi pesanti (OpenRouteService, profilo `dr
 3. **Edge Functions → Deploy a new function → Via Editor**:
    - nome della funzione: `ors`;
    - incollare il contenuto di `supabase/functions/ors/index.ts` e premere **Deploy**;
-   - lasciare attiva la verifica JWT (impostazione predefinita): così la funzione risponde solo agli utenti con login.
+   - in **Settings** della funzione disattivare "Verify JWT with legacy secret": il controllo del login è fatto dalla funzione stessa, compatibile con le chiavi JWT nuove.
 
 ### 3. Pagina
 1. In `js/config.js` inserire `SUPABASE_URL` e `SUPABASE_ANON_KEY`, presi da Project Settings → API. La chiave "anon" è pubblica per natura: i dati sono protetti dal login e dalle regole in `schema.sql`.

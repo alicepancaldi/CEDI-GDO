@@ -293,7 +293,7 @@ test('flusso completo: login, sedi, PV, import, distanze, ottimo, estrazioni', a
 });
 
 test('limite ORS raggiunto: l\'app aspetta e riprova da sola', async () => {
-  const p = apriPagina({ orsOpz: { limiteUnaVolta: true }, sessione: { user: { email: 'alice@esempio.it' } } });
+  const p = apriPagina({ orsOpz: { limiteUnaVolta: true }, sessione: { user: { email: 'alice@esempio.it' }, access_token: 'jwt-valido' } });
   await p.finche(() => !p.$('tab-pv').hidden && p.libero() && p.$('pEuroKm').value, 'avvio con sessione');
   p.tab('conf');
   const row = p.d.querySelectorAll('#sediForm .sede')[0];
@@ -304,7 +304,7 @@ test('limite ORS raggiunto: l\'app aspetta e riprova da sola', async () => {
 });
 
 test('sessione scaduta o funzione non pubblicata: errore leggibile', async () => {
-  const supa = creaSupabaseFinto(caricaFunzioneOrs(creaOrsFinto().fetch), { sessione: { user: { email: 'a@b.it' } } });
+  const supa = creaSupabaseFinto(caricaFunzioneOrs(creaOrsFinto().fetch), { sessione: { user: { email: 'a@b.it' }, access_token: 'jwt-valido' } });
   supa.client.functions.invoke = async () => ({ data: null, error: { message: 'Function not found' } });
   const p = apriPagina({ supa });
   await p.finche(() => p.libero() && p.$('pEuroKm').value, 'avvio');

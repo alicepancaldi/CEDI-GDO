@@ -36,6 +36,11 @@ function creaOrsFinto(opz = {}) {
   async function fetchFinto(url, init = {}) {
     const u = new URL(url);
     const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    if (u.pathname === '/auth/v1/user') {
+      st.auth = (st.auth || 0) + 1;
+      const h = init.headers || {};
+      return (h.Authorization === 'Bearer jwt-valido' && h.apikey === 'anon') ? json(200, { id: 'u1', email: 'alice@esempio.it' }) : json(401, { msg: 'invalid JWT' });
+    }
     if (st.limiteUnaVolta) { st.limiteUnaVolta = false; return json(429, { error: 'Rate limit' }); }
     if (u.pathname === '/geocode/search') {
       st.geocode++;
@@ -71,7 +76,7 @@ function creaOrsFinto(opz = {}) {
 function caricaFunzioneOrs(fetchFn, chiave = 'CHIAVE-TEST') {
   let gestore = null;
   const ctx = {
-    Deno: { env: { get: k => (k === 'ORS_API_KEY' ? chiave : undefined) }, serve: h => { gestore = h; } },
+    Deno: { env: { get: k => ({ ORS_API_KEY: chiave, SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'anon' })[k] || undefined }, serve: h => { gestore = h; } },
     fetch: fetchFn, Response, Request, URL, JSON, Number, String, Array, Math, Error, isFinite, console
   };
   vm.createContext(ctx);
@@ -184,7 +189,7 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
       async getSession() { return { data: { session: sessione }, error: null }; },
       async signInWithPassword({ email, password }) {
         if (utenti[email] !== password) return { data: { session: null }, error: { message: 'Invalid login credentials' } };
-        sessione = { user: { email }, access_token: 'jwt' }; ascoltatori.forEach(f => f('SIGNED_IN', sessione));
+        sessione = { user: { email }, access_token: 'jwt-valido' }; ascoltatori.forEach(f => f('SIGNED_IN', sessione));
         return { data: { session: sessione }, error: null };
       },
       async signOut() { sessione = null; ascoltatori.forEach(f => f('SIGNED_OUT', null)); return { error: null }; },
@@ -195,7 +200,7 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
         stats.invoke++;
         if (nome !== 'ors') return { data: null, error: { message: 'Function not found' } };
         if (!sessione) return { data: null, error: { message: 'Edge Function returned a non-2xx status code' } };
-        const res = await gestoreOrs(new Request('https://x.supabase.co/functions/v1/ors', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }));
+        const res = await gestoreOrs(new Request('https://x.supabase.co/functions/v1/ors', { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessione.access_token } }));
         return { data: await res.json(), error: null };
       }
     }
