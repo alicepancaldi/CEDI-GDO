@@ -79,3 +79,19 @@ test('accesso: token mancante o non valido rifiutato, nessuna chiamata a ORS', a
   assert.match(r.corpo.errore, /Accesso non autorizzato/);
   assert.strictEqual(ors.st.geocode, 0);
 });
+
+test('indirizzi HeiGIT usati per primi; riserva sul vecchio indirizzo solo se il nuovo non esiste', async () => {
+  let ors = creaOrsFinto(); let g = caricaFunzioneOrs(ors.fetch);
+  let r = await chiama(g, { azione: 'matrice', origini: [{ lat: 44.49, lng: 11.34 }], destinazioni: [{ lat: 44.64, lng: 10.92 }] });
+  assert.strictEqual(r.corpo.ok, true);
+  assert.deepStrictEqual(ors.st.hosts.filter(h => h !== 'x.supabase.co'), ['api.heigit.org']);
+  ors = creaOrsFinto({ nuoviAssenti: true }); g = caricaFunzioneOrs(ors.fetch);
+  r = await chiama(g, { azione: 'geocodifica', testo: 'Via Emilia 1, Bologna' });
+  assert.strictEqual(r.corpo.dati.lat, 44.4949);
+  assert.deepStrictEqual(ors.st.hosts.filter(h => h !== 'x.supabase.co'), ['api.heigit.org', 'api.openrouteservice.org']);
+  // errore vero (chiave errata) sul nuovo indirizzo: nessun tentativo sul vecchio
+  ors = creaOrsFinto(); g = caricaFunzioneOrs(ors.fetch, 'SBAGLIATA');
+  r = await chiama(g, { azione: 'matrice', origini: [{ lat: 44, lng: 11 }], destinazioni: [{ lat: 44.1, lng: 11 }] });
+  assert.match(r.corpo.errore, /403/);
+  assert.deepStrictEqual(ors.st.hosts.filter(h => h !== 'x.supabase.co'), ['api.heigit.org']);
+});

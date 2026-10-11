@@ -41,19 +41,24 @@ function creaOrsFinto(opz = {}) {
       const h = init.headers || {};
       return (h.Authorization === 'Bearer jwt-valido' && h.apikey === 'anon') ? json(200, { id: 'u1', email: 'alice@esempio.it' }) : json(401, { msg: 'invalid JWT' });
     }
+    st.host = u.host; st.hosts = (st.hosts || []).concat(u.host);
+    if (opz.nuoviAssenti && u.host === 'api.heigit.org') return json(404, { error: 'not found' });
+    const percorso = { 'api.heigit.org/pelias/v1/search': 'GS', 'api.openrouteservice.org/geocode/search': 'GS',
+      'api.heigit.org/pelias/v1/reverse': 'GR', 'api.openrouteservice.org/geocode/reverse': 'GR',
+      'api.heigit.org/openrouteservice/v2/matrix/driving-hgv': 'M', 'api.openrouteservice.org/v2/matrix/driving-hgv': 'M' }[u.host + u.pathname];
     if (st.limiteUnaVolta) { st.limiteUnaVolta = false; return json(429, { error: 'Rate limit' }); }
-    if (u.pathname === '/geocode/search') {
+    if (percorso === 'GS') {
       st.geocode++;
       if (u.searchParams.get('api_key') !== 'CHIAVE-TEST') return json(403, { error: 'Access to this API has been disallowed' });
       if (u.searchParams.get('boundary.country') !== 'IT') return json(400, { error: 'paese mancante' });
       const k = LUOGHI[u.searchParams.get('text')];
       return json(200, { type: 'FeatureCollection', features: k ? [{ geometry: { type: 'Point', coordinates: [k[1], k[0]] }, properties: { label: u.searchParams.get('text') + ', Italia', layer: k[2], confidence: k[2] === 'address' ? 1 : 0.6 } }] : [] });
     }
-    if (u.pathname === '/geocode/reverse') {
+    if (percorso === 'GR') {
       st.reverse++;
       return json(200, { features: [{ properties: { label: 'Località simulata ' + Number(u.searchParams.get('point.lat')).toFixed(3) } }] });
     }
-    if (u.pathname === '/v2/matrix/driving-hgv') {
+    if (percorso === 'M') {
       st.matrix++;
       if (init.headers.Authorization !== 'CHIAVE-TEST') return json(403, { error: { message: 'Access denied' } });
       const b = JSON.parse(init.body);

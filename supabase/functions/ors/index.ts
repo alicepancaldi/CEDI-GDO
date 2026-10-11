@@ -9,7 +9,10 @@
 //   { azione: "matrice", origini: [{lat,lng}], destinazioni: [{lat,lng}, ...] }
 // Risposta: sempre HTTP 200 con { ok: true, dati } oppure { ok: false, errore, riprova? }
 
-const ORS = "https://api.openrouteservice.org";
+// Indirizzi HeiGIT (api.openrouteservice.org è in dismissione: quota ridotta e chiusura a novembre 2026).
+// Il secondo indirizzo di ogni elenco è usato solo se il primo risponde 404/405/410 o non è raggiungibile.
+const BASI_MATRICE = ["https://api.heigit.org/openrouteservice", "https://api.openrouteservice.org"];
+const BASI_GEOCODIFICA = ["https://api.heigit.org/pelias/v1", "https://api.openrouteservice.org/geocode"];
 const PROFILO = "driving-hgv"; // percorsi per mezzi pesanti
 const MAX_PUNTI_MATRICE = 50;
 
@@ -30,16 +33,37 @@ function coord(p, nome) {
 }
 
 async function chiamaOrs(url, init) {
-  const r = await fetch(url, init);
+  let r;
+  try { r = await fetch(url, init); } catch (e) { const x = new Error("OpenRouteService non raggiungibile: " + (e && e.message)); x.alternativa = true; throw x; }
   if (r.status === 429) { const e = new Error("Limite di richieste OpenRouteService raggiunto"); e.riprova = true; throw e; }
   const testo = await r.text();
   let j = null;
   try { j = JSON.parse(testo); } catch (_) { /* risposta non JSON */ }
   if (!r.ok) {
     const msg = (j && j.error && (j.error.message || j.error)) || testo.slice(0, 200);
-    throw new Error("OpenRouteService " + r.status + ": " + (typeof msg === "string" ? msg : JSON.stringify(msg)));
+    const e = new Error("OpenRouteService " + r.status + ": " + (typeof msg === "string" ? msg : JSON.stringify(msg)));
+    e.alternativa = r.status === 404 || r.status === 405 || r.status === 410;
+    throw e;
   }
   return j;
+}
+
+/** Prova gli indirizzi in ordine; passa al successivo solo se quello corrente non esiste o non risponde. */
+async function chiamaConRiserva(urls, init) {
+  let ultimo;
+  for (const u of urls) {
+    try { return await chiamaOrs(u, init); } catch (e) { if (!e.alternativa) throw e; ultimo = e; }
+  }
+  throw ultimo;
+}
+
+function urlGeocodifica(percorso, chiave, parametri) {
+  return BASI_GEOCODIFICA.map((b) => {
+    const u = new URL(b + percorso);
+    u.searchParams.set("api_key", chiave);
+    Object.keys(parametri).forEach((k) => u.searchParams.set(k, parametri[k]));
+    return u.toString();
+  });
 }
 
 async function gestisci(b, chiave) {
@@ -47,13 +71,8 @@ async function gestisci(b, chiave) {
   if (b.azione === "geocodifica") {
     const testo = String(b.testo || "").trim();
     if (!testo) throw new Error("Indirizzo vuoto");
-    const u = new URL(ORS + "/geocode/search");
-    u.searchParams.set("api_key", chiave);
-    u.searchParams.set("text", testo);
-    u.searchParams.set("boundary.country", "IT");
-    u.searchParams.set("size", "1");
-    u.searchParams.set("lang", "it");
-    const j = await chiamaOrs(u.toString(), { method: "GET" });
+    const j = await chiamaConRiserva(urlGeocodifica("/search", chiave, { text: testo, "boundary.country": "IT", size: "1", lang: "it" }),
+      { method: "GET", headers: { Authorization: chiave, Accept: "application/json" } });
     const f = j && j.features && j.features[0];
     if (!f) return null;
     return {
@@ -66,13 +85,8 @@ async function gestisci(b, chiave) {
   }
   if (b.azione === "inversa") {
     const [lng, lat] = coord(b, "punto");
-    const u = new URL(ORS + "/geocode/reverse");
-    u.searchParams.set("api_key", chiave);
-    u.searchParams.set("point.lat", String(lat));
-    u.searchParams.set("point.lon", String(lng));
-    u.searchParams.set("size", "1");
-    u.searchParams.set("lang", "it");
-    const j = await chiamaOrs(u.toString(), { method: "GET" });
+    const j = await chiamaConRiserva(urlGeocodifica("/reverse", chiave, { "point.lat": String(lat), "point.lon": String(lng), size: "1", lang: "it" }),
+      { method: "GET", headers: { Authorization: chiave, Accept: "application/json" } });
     const f = j && j.features && j.features[0];
     return { indirizzo: f ? f.properties.label : null };
   }
@@ -81,7 +95,7 @@ async function gestisci(b, chiave) {
     if (!o.length || !d.length) throw new Error("Origini e destinazioni obbligatorie");
     if (o.length + d.length > MAX_PUNTI_MATRICE) throw new Error("Troppi punti in una richiesta (max " + MAX_PUNTI_MATRICE + ")");
     const locations = o.map((p, i) => coord(p, "origine " + i)).concat(d.map((p, i) => coord(p, "destinazione " + i)));
-    const j = await chiamaOrs(ORS + "/v2/matrix/" + PROFILO, {
+    const j = await chiamaConRiserva(BASI_MATRICE.map((b) => b + "/v2/matrix/" + PROFILO), {
       method: "POST",
       headers: { "Authorization": chiave, "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({
