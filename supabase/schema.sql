@@ -100,3 +100,47 @@ drop policy if exists "utenti autenticati" on public.reparti;
 drop policy if exists "utenti autenticati" on public.carichi;
 create policy "utenti autenticati" on public.reparti for all to authenticated using (true) with check (true);
 create policy "utenti autenticati" on public.carichi for all to authenticated using (true) with check (true);
+
+-- ============ Versione 3: viaggi reali e tariffario annuale ============
+-- Dai file del gestionale si acquisiscono solo: viaggio, data, giro, vettore (ragione sociale), tipo mezzo,
+-- capacità, clienti serviti e carico. Nessun dato di autisti, targhe o telefoni.
+create table if not exists public.viaggi (
+  id         text primary key,
+  data       date not null,
+  giro       text not null default '',
+  vettore    text not null default '',
+  mezzo      text not null default '',
+  cap_pallet numeric,
+  cap_roll   numeric
+);
+create index if not exists viaggi_data on public.viaggi (data);
+
+create table if not exists public.viaggi_clienti (
+  viaggio text not null references public.viaggi(id) on delete cascade,
+  pv      text not null references public.punti_vendita(codice) on delete cascade on update cascade,
+  occ     numeric not null default 0,
+  colli   numeric not null default 0,
+  km_zona numeric,
+  primary key (viaggio, pv)
+);
+
+create table if not exists public.tariffe (
+  id         bigint generated always as identity primary key,
+  anno       int not null,
+  mezzo      text not null default '*',
+  km_da      numeric not null default 0 check (km_da >= 0),
+  km_a       numeric check (km_a is null or km_a > km_da),
+  euro_km    numeric not null default 0 check (euro_km >= 0),
+  euro_fisso numeric not null default 0 check (euro_fisso >= 0)
+);
+alter table public.parametri add column if not exists anno_tariffa int;
+
+alter table public.viaggi enable row level security;
+alter table public.viaggi_clienti enable row level security;
+alter table public.tariffe enable row level security;
+drop policy if exists "utenti autenticati" on public.viaggi;
+drop policy if exists "utenti autenticati" on public.viaggi_clienti;
+drop policy if exists "utenti autenticati" on public.tariffe;
+create policy "utenti autenticati" on public.viaggi for all to authenticated using (true) with check (true);
+create policy "utenti autenticati" on public.viaggi_clienti for all to authenticated using (true) with check (true);
+create policy "utenti autenticati" on public.tariffe for all to authenticated using (true) with check (true);

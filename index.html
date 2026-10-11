@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Simulatore CEDI</title>
-<link rel="stylesheet" href="css/app.css?v=3">
+<link rel="stylesheet" href="css/app.css?v=4">
 </head>
 <body>
 <header>
@@ -99,16 +99,24 @@
       </div>
     </div>
     <div class="card">
+      <h2>Tariffario dei vettori</h2>
+      <div id="tariffeInfo"></div>
+      <p class="muted">Carica il tariffario da Excel o CSV: colonne <b>km da</b>, <b>km a</b>, <b>€/km</b> e/o <b>€ fisso</b> (per viaggio); facoltative <b>anno</b> e <b>mezzo</b> (es. MOT12, BIL33; vuoto = tutti). I km sono quelli fatturati (andata e ritorno, se così impostato nei parametri). Un nuovo file per lo stesso anno sostituisce il precedente.</p>
+      <div class="grid"><label>Anno (se non è nel file)<input id="annoTariffe" inputmode="numeric" placeholder="es. 2026"></label>
+        <label>File del tariffario<input type="file" id="fileTariffe" accept=".xlsx,.xls,.csv,.txt"></label></div>
+    </div>
+    <div class="card">
       <h2>Conversione colli → pallet</h2>
       <div id="repartiForm"></div>
     </div>
     <div class="card">
       <h2>Importa punti vendita e carichi da Excel o CSV</h2>
       <p class="muted">Due formati riconosciuti automaticamente (prima riga utile = intestazione):<br>
+        <b>Viaggi reali</b> — estrazione del gestionale di magazzino (colonne numvg, dtv, codcli, …): è il metodo consigliato, ogni viaggio viene ricalcolato da ogni sede.<br>
         <b>Carichi giornalieri</b> — codice cliente, ragione sociale, indirizzo, città, provincia, reparto, e una colonna per ogni data con i colli (oppure colonne "data" e "colli"). Il carico di un giorno è la somma dei reparti.<br>
         <b>Anagrafica con volumi</b> — codice, nome, indirizzo (o indirizzo + CAP + comune + provincia), pallet/settimana, consegne/settimana; facoltative latitudine e longitudine.<br>
         I PV con lo stesso codice vengono aggiornati.</p>
-      <input type="file" id="fileImport" accept=".xlsx,.csv,.txt">
+      <input type="file" id="fileImport" accept=".xlsx,.xls,.csv,.txt">
       <div id="anteprima"></div>
     </div>
   </section>
@@ -116,8 +124,9 @@
 
 <script src="js/vendor/supabase-2.117.3.js"></script>
 <script src="js/vendor/exceljs-4.4.0.min.js"></script>
-<script src="js/config.js?v=3"></script>
-<script src="js/calcolo.js?v=3"></script>
-<script src="js/app.js?v=3"></script>
+<script src="js/vendor/xlsx-0.18.5.full.min.js"></script>
+<script src="js/config.js?v=4"></script>
+<script src="js/calcolo.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
 </body>
 </html>

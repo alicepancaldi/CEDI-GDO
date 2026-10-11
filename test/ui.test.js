@@ -32,6 +32,7 @@ function apriPagina({ config = { SUPABASE_URL: 'https://x.supabase.co', SUPABASE
   const leggiBlob = (b, modo) => new Promise(res => { const fr = new w.FileReader(); fr.onload = () => res(fr.result); fr[modo](b); });
   w.File.prototype.arrayBuffer = function () { return leggiBlob(this, 'readAsArrayBuffer'); };
   w.eval(fs.readFileSync(path.join(RADICE, 'js/vendor/exceljs-4.4.0.min.js'), 'utf8'));
+  w.eval(fs.readFileSync(path.join(RADICE, 'js/vendor/xlsx-0.18.5.full.min.js'), 'utf8'));
   w.supabase = { createClient: () => S.client };
   w.eval('window.CONFIG = ' + JSON.stringify(Object.assign({ PAUSA_MATRICE_MS: 0, PAUSA_GEOCODIFICA_MS: 0, PAUSA_LIMITE_MS: 10 }, config)) + ';');
   w.eval(leggi('js/calcolo.js'));
@@ -397,5 +398,97 @@ test('posizione fuori dal comune indicato: si usa il centro del comune; verifica
   $('btnSalvaPV').click(); await p.attendiMsg(/76702 salvato/);
   assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '76702').geocodifica, 'provincia_errata');
   assert.match($('msg').textContent, /altra provincia: inserire le coordinate/);
+  // provincia vecchia nel dato ma comune giusto: posizione accettata
+  $('btnNuovoPV').click();
+  p.set('pvCodice', '177900'); p.set('pvIndirizzo', 'Via Quadrivio Nazionale 4, Cutro (CZ)'); p.set('pvPallet', '10'); p.set('pvConsegne', '6');
+  $('btnSalvaPV').click(); await p.attendiMsg(/177900 salvato/);
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '177900').geocodifica, 'address');
+  assert.deepStrictEqual(p.errori, []);
+});
+
+test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione, ottimo; nessun dato personale salvato', async () => {
+  const p = apriPagina({ sessione: { user: { email: 'alice@esempio.it' }, access_token: 'jwt-valido' } });
+  const { $, d, w, S } = p;
+  await p.finche(() => p.libero() && $('pEuroKm').value, 'avvio');
+  p.tab('conf');
+  for (const [i, ind] of [[0, 'Via Emilia 1, Bologna'], [1, 'Interporto, Bentivoglio']]) {
+    const row = d.querySelectorAll('#sediForm .sede')[i];
+    row.querySelector('.sInd').value = ind; row.querySelector('.sSalva').click();
+    await p.attendiMsg(/salvata/);
+  }
+  // un PV già in anagrafica (non deve essere toccato), uno nuovo che arriva dai viaggi
+  S.db.punti_vendita.push({ codice: '500', nome: 'ESISTENTE', indirizzo: 'Via Modena 10, Modena (MO)', lat: 44.6471, lng: 10.9252, pallet_settimana: null, consegne_settimana: null, geocodifica: 'address' });
+  $('btnRicarica').click(); await p.attendiMsg(/Dati aggiornati/);
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('work (2)');
+  ws.addRow(['mag', 'numvg', 'dtv', 'giro', 'codcli', 'numito', 'colli', 'nominativo', 'targa', 'pallet', 'roll', 'tipomezzo', 'rs', 'ind_bc', 'cap_bc', 'città_bc', 'prov_bc', 'Nome', 'Cognome', 'Telefono', 'km_GCL']);
+  const riga = (vg, dt, cli, occ, nome, ind, cap, com, prov) => ws.addRow(['50', vg, dt, 'G1', cli, occ, 100, 'TRASPORTI 49', 'AB123CD', 12, 20, 'MOT12', nome, ind, cap, com, prov, 'MARIO', 'ROSSI', 3331234567, 40]);
+  riga(9001, new Date(Date.UTC(2026, 7, 1)), 500, 3, 'ESISTENTE', 'Via Modena 10', '', 'Modena', 'MO');
+  riga(9001, new Date(Date.UTC(2026, 7, 1)), 501, 1, 'CARPI SRL', 'Via Carpi 1', '', 'Carpi', 'MO');
+  riga(9002, new Date(Date.UTC(2026, 7, 10)), 500, 6, 'ESISTENTE', 'Via Modena 10', '', 'Modena', 'MO');
+  await p.caricaFile('Agosto 2026.xlsx', new Uint8Array(await wb.xlsx.writeBuffer()));
+  await p.attendiMsg(/controllare l'anteprima/);
+  assert.match($('anteprima').textContent, /Viaggi reali: 2 viaggi dal 2026-08-01 al 2026-08-10, 1,5 clienti per viaggio in media, saturazione media dei mezzi 42%\. Clienti nuovi da geolocalizzare: 1\./);
+  assert.match($('anteprima').textContent, /cliente non presente in anagrafica: verrà aggiunto \(CARPI SRL/);
+  $('btnConfermaImport').click();
+  await p.attendiMsg(/Import completato/);
+  assert.match($('anteprima').textContent, /2 viaggi salvati, 1 nuovi clienti/);
+  assert.strictEqual(S.db.viaggi.length, 2); assert.strictEqual(S.db.viaggi_clienti.length, 3);
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '500').nome, 'ESISTENTE');
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '501').indirizzo, 'Via Carpi 1, Carpi (MO)');
+  const tuttoDb = JSON.stringify(S.db);
+  ['MARIO', 'ROSSI', '3331234567', 'AB123CD'].forEach(x => assert.ok(!tuttoDb.includes(x), 'dato personale nel database: ' + x));
+  // reimport dello stesso periodo: sostituisce, non duplica
+  await p.caricaFile('Agosto 2026.xlsx', new Uint8Array(await wb.xlsx.writeBuffer()));
+  await p.attendiMsg(/controllare l'anteprima/);
+  assert.match($('anteprima').textContent, /I 2 viaggi già presenti nello stesso periodo verranno sostituiti/);
+  $('btnConfermaImport').click(); await p.attendiMsg(/Import completato/);
+  assert.strictEqual(S.db.viaggi.length, 2); assert.strictEqual(S.db.viaggi_clienti.length, 3);
+
+  // tariffario 2026 da CSV, anno nel campo
+  p.set('annoTariffe', '2026');
+  const csv = 'km da;km a;€/km;€ fisso\r\n0;200;1,50;30\r\n200;;1,20;0\r\n';
+  const fT = new w.File([csv], 'tariffario.csv', { type: 'text/csv' });
+  Object.defineProperty($('fileTariffe'), 'files', { value: [fT], configurable: true });
+  $('fileTariffe').dispatchEvent(new w.Event('change'));
+  await p.attendiMsg(/Tariffario 2026 caricato: 2 righe/);
+  assert.match($('tariffeInfo').textContent, /oltre/);
+  // stesso anno ricaricato: sostituisce
+  Object.defineProperty($('fileTariffe'), 'files', { value: [new w.File([csv], 't.csv')], configurable: true });
+  $('fileTariffe').dispatchEvent(new w.Event('change'));
+  await p.attendiMsg(/Tariffario 2026 caricato/);
+  assert.strictEqual(S.db.tariffe.length, 2);
+
+  p.tab('riep'); $('btnDist').click(); await p.attendiMsg(/Distanze aggiornate/);
+  assert.match($('riepilogo').textContent, /Viaggi reali: 2 viaggi dal 2026-08-01 al 2026-08-10 \(10 giorni\), 2 clienti/);
+  assert.match($('riepilogo').textContent, /Tariffario 2026/);
+  const st = w.__simulatore.stato, dist = {}; st.dist.forEach(x => { dist[x.sede + x.pv] = x.km; });
+  const kmV1 = 2 * Math.max(dist.ATTUALE500, dist.ATTUALE501), kmV2 = 2 * dist.ATTUALE500;
+  const costo = km => km < 200 ? 30 + 1.5 * km : 1.2 * km;
+  const atteso = (costo(kmV1) + costo(kmV2)) * 36.5;
+  const cella = d.querySelectorAll('#riepilogo tbody tr')[0].cells[4].textContent;
+  assert.strictEqual(cella, Math.round(atteso).toLocaleString('it-IT') + ' €');
+
+  // maschera PV
+  p.tab('pv'); p.set('pvCerca', '501'); $('pvCerca').dispatchEvent(new w.Event('change'));
+  await p.finche(() => p.libero() && /servito da 1 viaggi reali/.test($('confronto').textContent), 'PV 501');
+  const r501 = Object.fromEntries([...d.querySelectorAll('#confronto tbody tr')].map(tr => [tr.cells[0].textContent, [...tr.cells].slice(1).map(c => c.textContent)]));
+  assert.strictEqual(r501['Costo ripartito nel periodo'][0], Math.round(costo(kmV1) * 0.25).toLocaleString('it-IT') + ' €');
+
+  // estrazione Excel con il foglio Viaggi
+  p.tab('riep'); $('btnXlsx').click(); await p.attendiMsg(/File Excel generato/);
+  const ab = await p.leggiBlob(w.__scaricati.at(-1).blob, 'readAsArrayBuffer');
+  const out = new ExcelJS.Workbook(); await out.xlsx.load(Buffer.from(ab));
+  assert.deepStrictEqual(out.worksheets.map(x => x.name), ['Riepilogo', 'Dettaglio PV', 'Viaggi', 'Parametri']);
+  assert.strictEqual(out.getWorksheet('Viaggi').rowCount, 3);
+  assert.ok(!JSON.stringify(out.getWorksheet('Viaggi').getSheetValues()).includes('ROSSI'));
+
+  // ottimo sui viaggi
+  p.tab('conf'); $('btnOttimo').click();
+  await p.attendiMsg(/Punto di ottimo calcolato sui 2 viaggi reali/);
+  p.tab('riep');
+  const righe = [...d.querySelectorAll('#riepilogo tbody tr')];
+  assert.strictEqual(righe.length, 3);
+  const sopra = righe.slice(0, 2).map(r => Number(r.cells[8].textContent.replace(/[^\d,-]/g, '').replace(',', '.')));
+  sopra.forEach(v => assert.ok(v >= -1, 'sede che costa meno dell\'ottimo: ' + v));
   assert.deepStrictEqual(p.errori, []);
 });

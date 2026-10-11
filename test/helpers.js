@@ -19,10 +19,11 @@ const LUOGHI = {
   'Via Carpi 1, 41012 Carpi (MO)': [44.7842, 10.8851, 'address'],
   'Via Carpi 1, Carpi (MO)': [44.7842, 10.8851, 'address'],
   'Via Modena 10, Modena (MO)': [44.6471, 10.9252, 'address'],
-  'Via San Nicola 7, Torre a Mare (BA)': [40.9044, 8.8720, 'address', 'SS'],
+  'Via San Nicola 7, Torre a Mare (BA)': [40.9044, 8.8720, 'address', 'SS', 'Via San Nicola 7, Sorso, SS, Italia'],
   'Torre a Mare (BA)': [41.0866, 16.9967, 'locality', 'BA'],
-  'Via Napoli 3, Santo Spirito (BA)': [43.767, 11.247, 'street', 'FI'],
-  'Santo Spirito (BA)': [43.768, 11.248, 'locality', 'FI'],
+  'Via Napoli 3, Santo Spirito (BA)': [43.767, 11.247, 'street', 'FI', 'Via Napoli, Santo Spirito, Firenze, FI, Italia'],
+  'Santo Spirito (BA)': [43.768, 11.248, 'locality', 'FI', 'Santo Spirito, Firenze, FI, Italia'],
+  'Via Quadrivio Nazionale 4, Cutro (CZ)': [39.03, 16.98, 'address', 'KR'],
   'Via Sassuolo 2, 41049 Sassuolo (MO)': [44.5446, 10.7836, 'street'],
   'Corso Vignola, 41058 Vignola (MO)': [44.4810, 11.0012, 'locality'],
   'Castel San Pietro Terme': [44.3976, 11.5876, 'locality'],
@@ -58,7 +59,7 @@ function creaOrsFinto(opz = {}) {
       if (u.searchParams.get('api_key') !== 'CHIAVE-TEST') return json(403, { error: 'Access to this API has been disallowed' });
       if (u.searchParams.get('boundary.country') !== 'IT') return json(400, { error: 'paese mancante' });
       const k = LUOGHI[u.searchParams.get('text')];
-      return json(200, { type: 'FeatureCollection', features: k ? [{ geometry: { type: 'Point', coordinates: [k[1], k[0]] }, properties: { label: u.searchParams.get('text') + (k && k[3] ? ', ' + k[3] : '') + ', Italia', layer: k[2], confidence: k[2] === 'address' ? 1 : 0.6 } }] : [] });
+      return json(200, { type: 'FeatureCollection', features: k ? [{ geometry: { type: 'Point', coordinates: [k[1], k[0]] }, properties: { label: (k && k[4]) || u.searchParams.get('text').replace(/\s*\([A-Z]{2}\)$/, '') + (k && k[3] ? ', ' + k[3] : '') + ', Italia', layer: k[2], confidence: k[2] === 'address' ? 1 : 0.6 } }] : [] });
     }
     if (percorso === 'GR') {
       st.reverse++;
@@ -102,9 +103,11 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
   const db = {
     parametri: [{ id: 1, euro_km: 1.3, km_fatturati: 'AR', capacita_pallet: 33, costo_fisso_viaggio: 0, settimane_anno: 52, giorni_settimana: 6 }],
     sedi: sedi.map(c => ({ codice: c, nome: nomi[c], indirizzo: '', lat: null, lng: null, capacita_mezzo: null, geocodifica: '' })),
-    punti_vendita: [], distanze: [], carichi: [], reparti: []
+    punti_vendita: [], distanze: [], carichi: [], reparti: [], viaggi: [], viaggi_clienti: [], tariffe: []
   };
-  const pk = { parametri: ['id'], sedi: ['codice'], punti_vendita: ['codice'], distanze: ['sede', 'pv'], carichi: ['pv', 'data', 'reparto'], reparti: ['reparto'] };
+  const pk = { parametri: ['id'], sedi: ['codice'], punti_vendita: ['codice'], distanze: ['sede', 'pv'], carichi: ['pv', 'data', 'reparto'], reparti: ['reparto'],
+    viaggi: ['id'], viaggi_clienti: ['viaggio', 'pv'], tariffe: ['id'] };
+  let prossimoId = 1;
   const revocati = { sedi: ['insert', 'delete'], parametri: ['insert', 'delete'] };
   const stats = { select: 0, upsert: 0, update: 0, delete: 0, invoke: 0, maxRange: 0 };
   const utenti = { 'alice@esempio.it': 'segreta' };
@@ -133,6 +136,16 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(r.data)) e('invalid input syntax for type date');
       if (!(r.colli >= 0)) e('violates check constraint carichi_colli_check');
     }
+    if (t === 'viaggi' && !/^\d{4}-\d{2}-\d{2}$/.test(r.data)) e('invalid input syntax for type date');
+    if (t === 'viaggi_clienti') {
+      if (!db.viaggi.some(v => v.id === r.viaggio)) e('violates foreign key constraint viaggi_clienti_viaggio_fkey');
+      if (!db.punti_vendita.some(p => p.codice === r.pv)) e('violates foreign key constraint viaggi_clienti_pv_fkey');
+    }
+    if (t === 'tariffe') {
+      if (!Number.isInteger(r.anno)) e('null value in column "anno"');
+      if (r.km_a != null && !(r.km_a > r.km_da)) e('violates check constraint tariffe_check');
+      if (!(r.euro_km >= 0) || !(r.euro_fisso >= 0)) e('violates check constraint tariffe_euro');
+    }
     if (t === 'reparti' && r.colli_per_pallet != null && !(r.colli_per_pallet > 0)) e('violates check constraint reparti');
     if (t === 'parametri' && r.giorni_settimana != null && !(r.giorni_settimana >= 1 && r.giorni_settimana <= 7)) e('giorni_settimana check');
     if (t === 'sedi' && r.capacita_mezzo !== null && r.capacita_mezzo !== undefined && !(r.capacita_mezzo > 0)) e('capacita check');
@@ -149,6 +162,8 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
       range(a, b) { rng = [a, b]; stats.maxRange = Math.max(stats.maxRange, b - a + 1); return q; },
       eq(c, v) { filtri.push(r => String(r[c]) === String(v)); return q; },
       gte(c, v) { filtri.push(r => String(r[c]) >= String(v)); return q; },
+      lte(c, v) { filtri.push(r => String(r[c]) <= String(v)); return q; },
+      insert(righe) { op = 'insert'; valori = righe; return q; },
       in(c, vs) { const s = vs.map(String); filtri.push(r => s.includes(String(r[c]))); return q; },
       match(o) { Object.keys(o).forEach(k => q.eq(k, o[k])); return q; },
       upsert(righe, o) { op = 'upsert'; valori = righe; conflitto = o && o.onConflict; ignora = !!(o && o.ignoreDuplicates); return q; },
@@ -181,6 +196,13 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
           });
           return { data: null, error: null };
         }
+        if (op === 'insert') {
+          stats.insert = (stats.insert || 0) + 1;
+          const nuove = clona(valori);
+          nuove.forEach(r => { if (t === 'tariffe') r.id = prossimoId++; verifica(t, r); if (db[t].some(x => chiave(t, x) === chiave(t, r))) throw { message: 'duplicate key value violates unique constraint' }; });
+          nuove.forEach(r => db[t].push(Object.assign({ mezzo: '*', km_da: 0, km_a: null, euro_km: 0, euro_fisso: 0 }, r)));
+          return { data: null, error: null };
+        }
         if (op === 'update') {
           stats.update++;
           const righe = db[t].filter(x => filtri.every(f => f(x)));
@@ -194,7 +216,8 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
           if (!filtri.length) throw { message: 'DELETE requires a WHERE clause' };
           const via = db[t].filter(x => filtri.every(f => f(x)));
           db[t] = db[t].filter(x => !via.includes(x));
-          if (t === 'punti_vendita') { const c = via.map(p => p.codice); db.distanze = db.distanze.filter(d => !c.includes(d.pv)); db.carichi = db.carichi.filter(d => !c.includes(d.pv)); }
+          if (t === 'punti_vendita') { const c = via.map(p => p.codice); db.distanze = db.distanze.filter(d => !c.includes(d.pv)); db.carichi = db.carichi.filter(d => !c.includes(d.pv)); db.viaggi_clienti = db.viaggi_clienti.filter(d => !c.includes(d.pv)); }
+          if (t === 'viaggi') { const c = via.map(v => v.id); db.viaggi_clienti = db.viaggi_clienti.filter(d => !c.includes(d.viaggio)); }
           return { data: null, error: null };
         }
       } catch (e) { return { data: null, error: { message: e.message || String(e) } }; }

@@ -55,7 +55,18 @@ Le distanze sono stradali reali per mezzi pesanti (OpenRouteService, profilo `dr
    - Elenco delle posizioni da verificare e delle distanze non trovate.
    - Estrazione in Excel (fogli Riepilogo, Dettaglio e Parametri) o in CSV.
 
-## Volumi: due modi
+## Metodo consigliato: ricalcolo dei viaggi reali
+Si importa l'estrazione mensile del gestionale di magazzino (un file per mese). Ogni viaggio reale (stessi clienti, stesso mezzo, stessi carichi) viene ricalcolato da ogni sede:
+- km del viaggio = distanza stradale per mezzi pesanti dalla sede al **cliente più lontano del giro**, × 2 se i km fatturati sono andata e ritorno;
+- costo del viaggio = **tariffario del vettore** dell'anno in uso (fasce di km con €/km e/o importo fisso, eventualmente per tipo di mezzo); senza tariffario si usa la tariffa €/km dei parametri;
+- costo annuo = costo del periodo × 365 / giorni del periodo;
+- il costo di ogni viaggio è ripartito tra i clienti in proporzione al carico (maschera del punto vendita).
+
+Dal file del gestionale vengono acquisiti solo viaggio, data, giro, vettore (ragione sociale), tipo di mezzo, capacità, clienti e carichi: nessun dato di autisti, targhe o telefoni. I file grandi (15 MB e oltre) sono letti in un thread separato del browser.
+
+Il punto di ottimo, con i viaggi importati, è il punto che minimizza la somma dei costi dei viaggi reali (distanze in linea d'aria × fattore di tortuosità stimato dalle distanze stradali già calcolate, ricerca a griglia con raffinamento); poi viene valorizzato con le distanze stradali come le altre sedi.
+
+## Volumi senza viaggi reali: due modi
 - **Carichi giornalieri** (consigliato), cioè i colli per cliente, giorno e reparto, dal file di logistica. Il carico di un giorno è la somma dei reparti, convertiti in pallet con i fattori "colli per pallet" di ogni reparto (Configurazione). I viaggi si calcolano **giorno per giorno**: carico del giorno ÷ capacità del mezzo, arrotondato per eccesso. Poi si riportano a settimana: viaggi del periodo ÷ (giorni con dati ÷ giorni lavorativi a settimana).
 - **Pallet e consegne a settimana** inseriti a mano, per i PV senza carichi giornalieri.
 

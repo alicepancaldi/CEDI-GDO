@@ -192,3 +192,119 @@ test('import carichi giornalieri formato lungo (data + colli)', () => {
   assert.deepStrictEqual(p.carichi, [{ pv: 'A1', data: '2026-03-03', reparto: 'ortofrutta', colli: 20 }]);
   assert.match(p.scartati[0].motivo, /data non valida/);
 });
+
+/* ---------------- viaggi reali ---------------- */
+const PV_V = { ortofrutta: 1 };
+function sediVia() {
+  return { ATTUALE: { codice: 'ATTUALE', nome: 'Att', indirizzo: 'a', lat: 41.0, lng: 16.0 }, OPZ1: { codice: 'OPZ1', nome: 'Nuova', indirizzo: 'n', lat: 41.1, lng: 16.1 },
+    OPZ2: { codice: 'OPZ2', lat: null }, OPZ3: { codice: 'OPZ3', lat: null }, OTTIMO: { codice: 'OTTIMO', lat: null } };
+}
+
+test('tariffario: fasce, mezzo specifico, anno in uso, oltre ultima fascia, senza tariffario', () => {
+  const T = [
+    { anno: 2025, mezzo: '*', km_da: 0, km_a: null, euro_km: 9, euro_fisso: 0 },
+    { anno: 2026, mezzo: '*', km_da: 0, km_a: 100, euro_km: 1.5, euro_fisso: 20 },
+    { anno: 2026, mezzo: '*', km_da: 100, km_a: 300, euro_km: 1.2, euro_fisso: 0 },
+    { anno: 2026, mezzo: 'BIL33', km_da: 0, km_a: null, euro_km: 2, euro_fisso: 0 }
+  ];
+  const Pt = Object.assign({}, P, { anno_tariffa: 2026 });
+  vicino(C.costoViaggio(50, 'MOT12', T, Pt), 20 + 75);
+  vicino(C.costoViaggio(100, 'MOT12', T, Pt), 120);           // estremo inferiore della fascia successiva
+  vicino(C.costoViaggio(400, 'MOT12', T, Pt), 480);           // oltre l'ultima fascia: ultima fascia
+  vicino(C.costoViaggio(50, 'bil33', T, Pt), 100);            // tariffa del mezzo (maiuscole/minuscole indifferenti)
+  vicino(C.costoViaggio(50, 'MOT12', T, Object.assign({}, P, { anno_tariffa: 2025 })), 450);
+  vicino(C.costoViaggio(50, 'MOT12', T, Object.assign({}, P, { anno_tariffa: 1999 })), 95); // anno inesistente: il più recente
+  vicino(C.costoViaggio(50, 'MOT12', [], P), 50 * 1.45);
+});
+
+test('ricalcolo viaggi: cliente più lontano, A/R, ripartizione per carico, anno, mancanti', () => {
+  const sedi = sediVia();
+  const pv = { A: { codice: 'A', lat: 41.2, lng: 16.2, nome: 'a' }, B: { codice: 'B', lat: 41.3, lng: 16.3, nome: 'b' } };
+  const d = (s, p, km) => ({ sede: s, pv: p, km, minuti: km, chiave: C.chiaveCoord(sedi[s], pv[p]) });
+  const dist = [d('ATTUALE', 'A', 30), d('ATTUALE', 'B', 50), d('OPZ1', 'A', 10), d('OPZ1', 'B', 25)];
+  const viaggi = [
+    { id: 'v1', data: '2026-08-01', mezzo: 'MOT12', clienti: [{ pv: 'A', occ: 3 }, { pv: 'B', occ: 1 }] },
+    { id: 'v2', data: '2026-08-10', mezzo: 'MOT12', clienti: [{ pv: 'A', occ: 5 }] }
+  ];
+  const R = C.ricalcolaViaggi(viaggi, sedi, dist, pv, P, []);
+  // attuale: v1 = 2×50 = 100 km, v2 = 60 km; nuova: v1 = 50 km, v2 = 20 km
+  vicino(R.tot.ATTUALE.km, 160); vicino(R.tot.OPZ1.km, 70);
+  vicino(R.tot.ATTUALE.costo, 160 * 1.45);
+  assert.strictEqual(R.periodo.giorni, 10); vicino(R.periodo.fattoreAnno, 36.5);
+  vicino(R.tot.OPZ1.costoAnno, 70 * 1.45 * 36.5);
+  // ripartizione: v1 attuale costa 145 €, A ha 3/4 del carico
+  vicino(R.perPV.ATTUALE.A.costo, 145 * 0.75 + 60 * 1.45); vicino(R.perPV.ATTUALE.B.costo, 145 * 0.25);
+  assert.strictEqual(R.perPV.ATTUALE.A.viaggi, 2);
+  const somma = Object.values(R.perPV.OPZ1).reduce((s, x) => s + x.costo, 0);
+  vicino(somma, R.tot.OPZ1.costo);
+  const rie = C.riepilogoViaggi(sedi, R);
+  vicino(rie[1].deltaAnno, (70 - 160) * 1.45 * 36.5);
+  // distanza mancante o non più valida: viaggio non calcolabile per quella sede
+  const R2 = C.ricalcolaViaggi(viaggi, sedi, dist.filter(x => !(x.sede === 'OPZ1' && x.pv === 'B')), pv, P, []);
+  assert.strictEqual(R2.tot.OPZ1.mancanti, 1); assert.strictEqual(R2.tot.OPZ1.viaggi, 1);
+  assert.throws(() => C.estrazioneViaggi(sedi, R2, pv), /1 viaggi non calcolabili/);
+  const e = C.estrazioneViaggi(sedi, R, pv);
+  assert.strictEqual(e.viaggi.length, 2); assert.strictEqual(e.righe.length, 4);
+  assert.strictEqual(e.intestazioneViaggi.length, 7 + 2 * 2);
+  assert.deepStrictEqual(e.viaggi[0].slice(7), [100, 145, 50, 72.5]);
+});
+
+test('ottimo sui viaggi: coincide con la ricerca esaustiva della stessa funzione', () => {
+  const coord = { A: { lat: 41.0, lng: 16.0 }, B: { lat: 41.0, lng: 16.6 }, C: { lat: 40.6, lng: 17.2 }, D: { lat: 41.3, lng: 16.3 } };
+  const viaggi = [
+    { mezzo: 'M', clienti: [{ pv: 'A' }, { pv: 'D' }] }, { mezzo: 'M', clienti: [{ pv: 'B' }] }, { mezzo: 'M', clienti: [{ pv: 'C' }] },
+    { mezzo: 'M', clienti: [{ pv: 'C' }, { pv: 'B' }] }, { mezzo: 'M', clienti: [{ pv: 'A' }] }, { mezzo: 'M', clienti: [{ pv: 'X' }] }
+  ];
+  const o = C.ottimoViaggi(viaggi, coord, P, [], 1.3);
+  const kx = 111.32 * Math.cos(((41 * 3 + 41.3 + 40.6 * 2 + 41 * 2 + 41) / 9) * Math.PI / 180);
+  function f(lat, lng) {
+    return viaggi.reduce((s, v) => {
+      const pts = v.clienti.map(c => coord[c.pv]).filter(Boolean); if (!pts.length) return s;
+      const m = Math.max(...pts.map(p => Math.hypot((p.lng - lng) * kx, (p.lat - lat) * 110.574)));
+      return s + m * 1.3 * 2 * 1.45;
+    }, 0);
+  }
+  let best = Infinity;
+  for (let la = 40.5; la <= 41.4; la += 0.005) for (let ln = 15.9; ln <= 17.3; ln += 0.005) best = Math.min(best, f(la, ln));
+  assert.ok(f(o.lat, o.lng) <= best * 1.002, f(o.lat, o.lng) + ' vs ' + best);
+  assert.throws(() => C.ottimoViaggi([{ clienti: [{ pv: 'X' }] }], coord, P, [], 1.3), /Servono viaggi/);
+});
+
+test('import viaggi dal gestionale: aggregazione per viaggio, colonne ripetute, dati personali esclusi', () => {
+  const hdr = ['mag', 'numvg', 'dtv', 'giro', 'codcli', 'repcd', 'numito', 'colli', 'giro', 'nominativo', 'targa', 'pallet', 'roll', 'tipomezzo',
+    'rs', 'ind', 'ind_bc', 'cap_bc', 'città_bc', 'prov_bc', 'Nome', 'Cognome', 'Telefono', 'km_GCL', 'pallet'];
+  const r = (vg, dt, cli, occ, colli) => ['50', vg, dt, 'G1', cli, 'O', occ, colli, 'ALTRO', 'TRASPORTI 49   ', 'AB123CD', 23, 38, 'MOT23',
+    'MARKET ' + cli, 'SEDE LEGALE 1', 'VIA ROMA, S.N.', '70100.0', 'BARI', 'BA', 'MARIO', 'ROSSI', '3331234567', 18, ''];
+  const righe = [hdr, r(1001, 46235, 80815, 1.5, 100), r(1001, 46235, 80815, 0.5, 20), r(1001, 46235, 473908, 2, 300), r(1002, '2026-08-02', 80815, 3, 50),
+    ['50', 1003, 46235, 'G1', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']];
+  const p = C.preparaImport(righe);
+  assert.strictEqual(p.tipo, 'viaggi');
+  assert.strictEqual(p.viaggi.length, 2, 'riga senza cliente ignorata');
+  const v = p.viaggi[0];
+  assert.deepStrictEqual([v.id, v.data, v.giro, v.vettore, v.mezzo, v.capPallet, v.capRoll], ['1001', '2026-08-01', 'G1', 'TRASPORTI 49', 'MOT23', 23, 38]);
+  assert.deepStrictEqual(v.clienti.map(c => [c.pv, c.occ, c.colli, c.kmZona]), [['80815', 2, 120, 18], ['473908', 2, 300, 18]]);
+  assert.deepStrictEqual([p.dal, p.al], ['2026-08-01', '2026-08-02']);
+  assert.deepStrictEqual(p.validi.map(x => [x.codice, x.nome, x.indirizzo]), [['80815', 'MARKET 80815', 'VIA ROMA, 70100 BARI (BA)'], ['473908', 'MARKET 473908', 'VIA ROMA, 70100 BARI (BA)']]);
+  const tutto = JSON.stringify(p);
+  ['MARIO', 'ROSSI', '3331234567', 'AB123CD', 'SEDE LEGALE'].forEach(x => assert.ok(!tutto.includes(x), 'dato non dovuto acquisito: ' + x));
+});
+
+test('import tariffario', () => {
+  const t = C.preparaTariffe([['Anno', 'Mezzo', 'Km da', 'Km a', '€/km', '€ fisso'], ['2026', '', '0', '100', '1,50', '20'], ['2026', 'BIL33', '0', '', '2', ''], ['', '', '', '', '', '']]);
+  assert.deepStrictEqual(t, [{ anno: 2026, mezzo: '*', km_da: 0, km_a: 100, euro_km: 1.5, euro_fisso: 20 }, { anno: 2026, mezzo: 'BIL33', km_da: 0, km_a: null, euro_km: 2, euro_fisso: 0 }]);
+  const t2 = C.preparaTariffe([['da', 'a', 'euro/km'], [0, 50, 1.8]]);
+  assert.deepStrictEqual(t2, [{ anno: null, mezzo: '*', km_da: 0, km_a: 50, euro_km: 1.8, euro_fisso: 0 }]);
+  assert.throws(() => C.preparaTariffe([['colonna', 'altra'], [1, 2]]), /non riconosciute/);
+});
+
+test('lettura date: numero seriale di Excel', () => {
+  assert.strictEqual(C.leggiData(46235), '2026-08-01');
+  assert.strictEqual(C.leggiData(46265), '2026-08-31');
+});
+
+test('comune dall\'etichetta ORS', () => {
+  assert.strictEqual(C.comuneDaEtichetta('Via Quadrivio Nazionale 4, Cutro, KR, Italia'), 'Cutro');
+  assert.strictEqual(C.comuneDaEtichetta('Torre Incina, Comune di Polignano a Mare, BA, Italia'), 'Polignano a Mare');
+  assert.strictEqual(C.comuneDaEtichetta('Santo Spirito, Firenze, FI, Italia'), 'Firenze');
+  assert.strictEqual(C.comuneDaEtichetta('qualcosa'), null);
+});

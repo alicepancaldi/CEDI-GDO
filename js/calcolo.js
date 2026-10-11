@@ -244,6 +244,10 @@
   /** Data da cella o intestazione: Date, "2026-03-02", "2026-03-02T00:00:00Z", "02/03/2026" -> "2026-03-02"; altrimenti null. */
   function leggiData(v) {
     if (v instanceof Date || (v && typeof v.toISOString === 'function')) return isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+    if (typeof v === 'number' && v > 20000 && v < 80000) { // numero seriale di Excel
+      var dt = new Date(Math.round((v - 25569) * 86400000));
+      return dt.toISOString().slice(0, 10);
+    }
     var s = String(v == null ? '' : v).trim(), m;
     if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})(T.*)?$/))) return m[1] + '-' + m[2] + '-' + m[3];
     if ((m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/))) {
@@ -280,6 +284,15 @@
   /** Sigla provincia: dall'indirizzo composto "…, COMUNE (BA)" e dall'etichetta ORS "…, Bari, BA, Italia". */
   function provinciaDaIndirizzo(ind) { var m = String(ind || '').match(/\(([A-Za-z]{2})\)\s*$/); return m ? m[1].toUpperCase() : null; }
   function provinciaDaEtichetta(et) { var m = String(et || '').match(/,\s*([A-Z]{2}),\s*Italia\s*$/); return m ? m[1] : null; }
+
+  /** Comune dall'etichetta ORS: "Via X 4, Cutro, KR, Italia" -> "Cutro"; "…, Comune di Polignano a Mare, BA, Italia" -> "Polignano a Mare". */
+  function comuneDaEtichetta(et) {
+    var p = String(et || '').split(',').map(function (x) { return x.trim(); });
+    if (p.length >= 3 && /^Italia$/i.test(p[p.length - 1]) && /^[A-Z]{2}$/.test(p[p.length - 2])) return p[p.length - 3].replace(/^Comune di\s+/i, '');
+    return null;
+  }
+
+  function normTesto(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim(); }
 
   function normReparto(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim() || 'unico'; }
 
@@ -366,8 +379,280 @@
       date: Object.keys(date).sort(), reparti: Object.keys(reparti).sort() };
   }
 
+  /* ---------- viaggi reali (estrazione del gestionale di magazzino) ---------- */
+
+  // Solo queste colonne vengono lette: dati di autisti, targhe e telefoni non vengono mai acquisiti.
+  var ALIAS_VIAGGI = {
+    viaggio: ['numvg', 'n viaggio', 'numero viaggio', 'viaggio', 'id viaggio'],
+    data: ['dtv', 'data viaggio', 'data'],
+    codice: ['codcli', 'codice cliente', 'cod cli', 'cliente'],
+    giro: ['giro'],
+    vettore: ['nominativo', 'vettore'],
+    mezzo: ['tipomezzo', 'tipo mezzo', 'mezzo'],
+    capPallet: ['pallet', 'capacita pallet', 'posti pallet'],
+    capRoll: ['roll', 'capacita roll', 'posti roll'],
+    occ: ['numito', 'unita equivalenti', 'pallet equivalenti', 'occupazione'],
+    colli: ['colli', 'ncol'],
+    reparto: ['repcd', 'reparto'],
+    nome: ['rs', 'ragione sociale', 'nome'],
+    indirizzo: ['ind bc', 'indirizzo consegna', 'indirizzo'],
+    cap: ['cap bc', 'cap consegna', 'cap'],
+    comune: ['citta bc', 'comune consegna', 'citta', 'comune'],
+    provincia: ['prov bc', 'provincia consegna', 'prov', 'provincia'],
+    kmZona: ['km gcl', 'km zona']
+  };
+  var REPARTI_CODICE = { O: 'ortofrutta', F: 'salumi/formaggi', A: 'carne', S: 'surgelati' };
+
+  function colonneViaggi(intestazione) {
+    var norm = intestazione.map(normTitolo), out = {};
+    Object.keys(ALIAS_VIAGGI).forEach(function (campo) {
+      var alias = ALIAS_VIAGGI[campo];
+      for (var a = 0; a < alias.length; a++) {
+        var i = norm.indexOf(normTitolo(alias[a]));       // prima occorrenza (nel gestionale alcune intestazioni sono ripetute)
+        if (i >= 0) { out[campo] = i; return; }
+      }
+    });
+    return out;
+  }
+
+  function preparaViaggi(righe, iHdr) {
+    var col = colonneViaggi(righe[iHdr]);
+    var viaggi = {}, ordine = [], anag = {}, ordineAnag = [], scartati = [], avvisi = [], date = {};
+    var testo = function (r, c) { return col[c] === undefined ? '' : String(r[col[c]] === undefined || r[col[c]] === null ? '' : r[col[c]]).trim(); };
+    var numero = function (r, c) { var t = testo(r, c); if (t === '') return null; try { return num(t, c); } catch (e) { return null; } };
+    var codiceDa = function (t) { return /^\d+\.0+$/.test(t) ? t.replace(/\.0+$/, '') : t; };
+    righe.slice(iHdr + 1).forEach(function (r, k) {
+      var riga = iHdr + k + 2;
+      if (!r || !r.length) return;
+      var id = codiceDa(testo(r, 'viaggio')), pv = codiceDa(testo(r, 'codice'));
+      if (!id || !pv) return;                                  // righe senza viaggio o senza cliente: non sono consegne
+      var data = leggiData(r[col.data]);
+      if (!data) { scartati.push({ riga: riga, codice: pv, motivo: 'data viaggio non valida "' + testo(r, 'data') + '"' }); return; }
+      date[data] = true;
+      var v = viaggi[id];
+      if (!v) {
+        v = viaggi[id] = { id: id, data: data, giro: testo(r, 'giro'), vettore: testo(r, 'vettore').replace(/\s+/g, ' '), mezzo: testo(r, 'mezzo'),
+          capPallet: numero(r, 'capPallet'), capRoll: numero(r, 'capRoll'), clienti: {} };
+        ordine.push(id);
+      }
+      var c = v.clienti[pv] = v.clienti[pv] || { pv: pv, occ: 0, colli: 0, kmZona: null };
+      c.occ += numero(r, 'occ') || 0;
+      c.colli += numero(r, 'colli') || 0;
+      var kz = numero(r, 'kmZona'); if (kz !== null) c.kmZona = kz;
+      if (!anag[pv]) {
+        var cap = codiceDa(testo(r, 'cap'));
+        var vv = function (campo) { return campo === 'cap' ? cap : testo(r, campo); };
+        anag[pv] = { riga: riga, codice: pv, nome: testo(r, 'nome').replace(/\s+/g, ' '), indirizzo: componiIndirizzo(vv), pos: null, pallet: null, consegne: null };
+        ordineAnag.push(pv);
+      }
+    });
+    var lista = ordine.map(function (id) {
+      var v = viaggi[id];
+      v.clienti = Object.keys(v.clienti).map(function (k) { return v.clienti[k]; });
+      return v;
+    });
+    var elencoDate = Object.keys(date).sort();
+    return { tipo: 'viaggi', viaggi: lista, validi: ordineAnag.map(function (k) { return anag[k]; }), scartati: scartati, avvisi: avvisi, colonne: col,
+      date: elencoDate, dal: elencoDate[0] || null, al: elencoDate[elencoDate.length - 1] || null };
+  }
+
+  /* ---------- tariffario ---------- */
+
+  /** Righe del tariffario dell'anno indicato (o del più recente), per mezzo specifico o generico ('*'). */
+  function righeTariffa(tariffe, anno, mezzo) {
+    if (!tariffe || !tariffe.length) return [];
+    var anni = tariffe.map(function (t) { return t.anno; }).filter(function (a, i, x) { return x.indexOf(a) === i; }).sort();
+    var a = anno && anni.indexOf(anno) >= 0 ? anno : anni[anni.length - 1];
+    var dellAnno = tariffe.filter(function (t) { return t.anno === a; });
+    var specifiche = dellAnno.filter(function (t) { return mezzo && t.mezzo && t.mezzo !== '*' && t.mezzo.toUpperCase() === String(mezzo).toUpperCase(); });
+    return specifiche.length ? specifiche : dellAnno.filter(function (t) { return !t.mezzo || t.mezzo === '*'; });
+  }
+
+  /** Costo di un viaggio di km (già A/R o solo andata secondo i parametri). Senza tariffario: €/km dei parametri. */
+  function costoViaggio(km, mezzo, tariffe, P) {
+    var righe = righeTariffa(tariffe, P.anno_tariffa, mezzo);
+    if (!righe.length) return km * P.euro_km + P.costo_fisso_viaggio;
+    var f = righe.filter(function (t) { return km >= (t.km_da || 0) && (t.km_a == null || km < t.km_a); })[0];
+    if (!f) f = righe.slice().sort(function (a, b) { return (b.km_da || 0) - (a.km_da || 0); })[0]; // oltre l'ultima fascia: ultima fascia
+    return (f.euro_fisso || 0) + (f.euro_km || 0) * km;
+  }
+
+  /** Giorni di calendario coperti dai viaggi e fattore per riportare all'anno. */
+  function periodoViaggi(viaggi) {
+    if (!viaggi.length) return null;
+    var dd = viaggi.map(function (v) { return v.data; }).sort();
+    var giorni = Math.round((Date.parse(dd[dd.length - 1]) - Date.parse(dd[0])) / 86400000) + 1;
+    return { dal: dd[0], al: dd[dd.length - 1], giorni: giorni, fattoreAnno: 365 / giorni };
+  }
+
+  /**
+   * Ricalcolo dei viaggi reali da ogni sede: km del viaggio = distanza dalla sede al cliente più lontano del giro,
+   * × 2 se i km fatturati sono andata e ritorno. Costo da tariffario. Il costo è ripartito tra i clienti in base al carico.
+   */
+  function ricalcolaViaggi(viaggi, sedi, distanze, pvMap, P, tariffe) {
+    var mappa = {};
+    distanze.forEach(function (d) { mappa[d.sede + '#' + d.pv] = d; });
+    var attive = CODICI_SEDI.filter(function (c) { return sedi[c] && sedi[c].lat !== null && sedi[c].lat !== undefined; });
+    var per = periodoViaggi(viaggi);
+    var fatt = P.km_fatturati === 'AR' ? 2 : 1;
+    var tot = {}, perPV = {}, dettaglio = [];
+    attive.forEach(function (c) { tot[c] = { viaggi: 0, km: 0, costo: 0, costoAnno: 0, mancanti: 0 }; perPV[c] = {}; });
+    viaggi.forEach(function (v) {
+      var riga = { viaggio: v, sedi: {} };
+      var occTot = v.clienti.reduce(function (s, c) { return s + (c.occ > 0 ? c.occ : 0); }, 0);
+      attive.forEach(function (sc) {
+        var max = 0, manca = false;
+        v.clienti.forEach(function (c) {
+          var pv = pvMap[c.pv], d = mappa[sc + '#' + c.pv];
+          if (!pv || !d || d.chiave !== chiaveCoord(sedi[sc], pv)) { manca = true; return; }
+          if (d.km > max) max = d.km;
+        });
+        if (manca) { tot[sc].mancanti++; riga.sedi[sc] = null; return; }
+        var km = max * fatt, costo = costoViaggio(km, v.mezzo, tariffe, P);
+        tot[sc].viaggi++; tot[sc].km += km; tot[sc].costo += costo;
+        riga.sedi[sc] = { km: km, costo: costo };
+        v.clienti.forEach(function (c) {
+          var quota = occTot > 0 ? Math.max(c.occ, 0) / occTot : 1 / v.clienti.length;
+          var x = perPV[sc][c.pv] = perPV[sc][c.pv] || { viaggi: 0, costo: 0, occ: 0 };
+          x.viaggi++; x.costo += costo * quota; x.occ += Math.max(c.occ, 0);
+        });
+      });
+      dettaglio.push(riga);
+    });
+    attive.forEach(function (c) {
+      tot[c].costoAnno = per ? tot[c].costo * per.fattoreAnno : 0;
+      Object.keys(perPV[c]).forEach(function (k) { perPV[c][k].costoAnno = per ? perPV[c][k].costo * per.fattoreAnno : 0; });
+    });
+    return { attive: attive, tot: tot, perPV: perPV, dettaglio: dettaglio, periodo: per };
+  }
+
+  function riepilogoViaggi(sedi, R) {
+    var rif = R.tot.ATTUALE, ott = R.tot.OTTIMO;
+    return R.attive.map(function (c) {
+      var x = R.tot[c];
+      return {
+        codice: c, nome: sedi[c].nome, indirizzo: sedi[c].indirizzo, viaggi: x.viaggi, km: x.km, costo: x.costo, costoAnno: x.costoAnno, mancanti: x.mancanti,
+        deltaAnno: rif && c !== 'ATTUALE' ? x.costoAnno - rif.costoAnno : null,
+        deltaPct: rif && c !== 'ATTUALE' && rif.costoAnno ? (x.costoAnno - rif.costoAnno) / rif.costoAnno * 100 : null,
+        deltaKm: rif && c !== 'ATTUALE' ? x.km - rif.km : null,
+        sopraOttimo: ott && c !== 'OTTIMO' ? x.costoAnno - ott.costoAnno : null
+      };
+    });
+  }
+
+  /**
+   * Punto di ottimo per i viaggi reali: minimizza Σ costo(km al cliente più lontano di ogni viaggio).
+   * Distanze in linea d'aria × fattore di tortuosità (stimato dalle distanze stradali già calcolate). Ricerca a griglia con raffinamento.
+   */
+  function ottimoViaggi(viaggi, coordPV, P, tariffe, tortuosita) {
+    var k = tortuosita > 0 ? tortuosita : 1.3, fatt = P.km_fatturati === 'AR' ? 2 : 1;
+    var gruppi = viaggi.map(function (v) {
+      return { mezzo: v.mezzo, punti: v.clienti.map(function (c) { return coordPV[c.pv]; }).filter(Boolean) };
+    }).filter(function (g) { return g.punti.length; });
+    if (!gruppi.length) throw new Error('Servono viaggi con clienti geolocalizzati.');
+    var tutti = []; gruppi.forEach(function (g) { tutti = tutti.concat(g.punti); });
+    var lat0 = tutti.reduce(function (s, p) { return s + p.lat; }, 0) / tutti.length;
+    var kx = 111.320 * Math.cos(lat0 * Math.PI / 180), ky = 110.574;
+    function f(lat, lng) {
+      var s = 0;
+      for (var i = 0; i < gruppi.length; i++) {
+        var g = gruppi[i], m = 0;
+        for (var j = 0; j < g.punti.length; j++) {
+          var dx = (g.punti[j].lng - lng) * kx, dy = (g.punti[j].lat - lat) * ky, d = Math.sqrt(dx * dx + dy * dy);
+          if (d > m) m = d;
+        }
+        s += costoViaggio(m * k * fatt, g.mezzo, tariffe, P);
+      }
+      return s;
+    }
+    var la = tutti.map(function (p) { return p.lat; }), lo = tutti.map(function (p) { return p.lng; });
+    var b = { la1: Math.min.apply(null, la), la2: Math.max.apply(null, la), lo1: Math.min.apply(null, lo), lo2: Math.max.apply(null, lo) };
+    var best = { v: Infinity }, N = 40;
+    for (var giro = 0; giro < 5; giro++) {
+      var dla = (b.la2 - b.la1) / N, dlo = (b.lo2 - b.lo1) / N;
+      for (var i = 0; i <= N; i++) for (var j = 0; j <= N; j++) {
+        var lat = b.la1 + i * dla, lng = b.lo1 + j * dlo, v = f(lat, lng);
+        if (v < best.v) best = { v: v, lat: lat, lng: lng };
+      }
+      b = { la1: best.lat - 2 * dla, la2: best.lat + 2 * dla, lo1: best.lng - 2 * dlo, lo2: best.lng + 2 * dlo };
+    }
+    return { lat: best.lat, lng: best.lng, costoStimato: best.v };
+  }
+
+  /** Primo foglio non vuoto di un file Excel letto con SheetJS -> array di righe (date come numero seriale). */
+  function righeDaExcel(XLSX, buffer) {
+    var wb = XLSX.read(buffer, { type: 'array', dense: true, cellDates: false, cellFormula: false, cellHTML: false, cellText: false });
+    for (var i = 0; i < wb.SheetNames.length; i++) {
+      var righe = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[i]], { header: 1, raw: true, defval: '', blankrows: true });
+      if (righe.some(function (r) { return r && r.some(function (c) { return String(c).trim() !== ''; }); })) return righe;
+    }
+    throw new Error('Il file Excel non contiene dati.');
+  }
+
+  function tortuosita(sede, distanze, pvMap) {
+    var r = distanze.filter(function (d) { return d.sede === sede.codice && pvMap[d.pv]; }).map(function (d) {
+      var l = distanzaKm(sede, pvMap[d.pv]); return l > 5 ? d.km / l : null;
+    }).filter(function (x) { return x && x > 1 && x < 3; }).sort(function (a, b) { return a - b; });
+    return r.length ? r[Math.floor(r.length / 2)] : 1.3;
+  }
+
+  /** Estrazione per i viaggi reali: riepilogo per sede, dettaglio per PV (costo ripartito) e dettaglio per viaggio. */
+  function estrazioneViaggi(sedi, R, pvMap) {
+    var mancanti = R.attive.reduce(function (s, c) { return s + R.tot[c].mancanti; }, 0);
+    if (mancanti) throw new Error('Ci sono ' + mancanti + ' viaggi non calcolabili per distanze mancanti: premere "Aggiorna distanze" prima di estrarre.');
+    var nomeS = function (c) { return sedi[c].nome; };
+    var intestRiep = ['Sede', 'Indirizzo', 'Viaggi', 'Km fatturati nel periodo', 'Costo nel periodo €', 'Costo/anno €', 'Δ costo/anno € vs attuale', 'Δ %', 'Sopra l\'ottimo €/anno'];
+    var righeRiep = riepilogoViaggi(sedi, R).map(function (s) {
+      return [s.nome, s.indirizzo, s.viaggi, arr(s.km, 0), arr(s.costo, 0), arr(s.costoAnno, 0), s.deltaAnno === null ? '' : arr(s.deltaAnno, 0),
+        s.deltaPct === null ? '' : arr(s.deltaPct, 1), s.sopraOttimo === null ? '' : arr(s.sopraOttimo, 0)];
+    });
+    var intest = ['Codice PV', 'Nome PV', 'Sede', 'Viaggi nel periodo', 'Costo ripartito nel periodo €', 'Costo ripartito/anno €', 'Δ costo/anno € vs attuale', 'Δ %'];
+    var righe = [];
+    var codici = {}; R.attive.forEach(function (c) { Object.keys(R.perPV[c]).forEach(function (k) { codici[k] = true; }); });
+    Object.keys(codici).sort(function (a, b) { return a.localeCompare(b, 'it', { numeric: true }); }).forEach(function (k) {
+      var a = R.perPV.ATTUALE && R.perPV.ATTUALE[k];
+      R.attive.forEach(function (c) {
+        var x = R.perPV[c][k]; if (!x) return;
+        var d = c !== 'ATTUALE' && a ? x.costoAnno - a.costoAnno : null;
+        righe.push([k, pvMap[k] ? pvMap[k].nome : '', nomeS(c), x.viaggi, arr(x.costo, 0), arr(x.costoAnno, 0), d === null ? '' : arr(d, 0), d === null || !a.costoAnno ? '' : arr(d / a.costoAnno * 100, 1)]);
+      });
+    });
+    var intestV = ['Viaggio', 'Data', 'Giro', 'Vettore', 'Mezzo', 'Clienti', 'Carico (unità)'];
+    R.attive.forEach(function (c) { intestV.push('Km ' + nomeS(c), 'Costo € ' + nomeS(c)); });
+    var righeV = R.dettaglio.map(function (d) {
+      var v = d.viaggio, r = [v.id, v.data, v.giro, v.vettore, v.mezzo, v.clienti.map(function (c) { return c.pv; }).join(' '),
+        arr(v.clienti.reduce(function (s, c) { return s + c.occ; }, 0), 2)];
+      R.attive.forEach(function (c) { var x = d.sedi[c]; r.push(x ? arr(x.km, 1) : '', x ? arr(x.costo, 2) : ''); });
+      return r;
+    });
+    return { intestazioneRiepilogo: intestRiep, riepilogo: righeRiep, intestazione: intest, righe: righe, intestazioneViaggi: intestV, viaggi: righeV };
+  }
+
+  /** Tariffario da tabella: colonne anno, mezzo (facoltativa), km da, km a, €/km, € fisso. */
+  function preparaTariffe(righe) {
+    var iHdr = righe.findIndex(function (r) { return r && r.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }); });
+    if (iHdr < 0) throw new Error('Il file è vuoto.');
+    var norm = righe[iHdr].map(normTitolo);
+    var trova = function (al) { for (var a = 0; a < al.length; a++) { var i = norm.indexOf(al[a]); if (i >= 0) return i; } return -1; };
+    var c = { anno: trova(['anno', 'anno validita']), mezzo: trova(['mezzo', 'tipo mezzo', 'tipomezzo']), da: trova(['km da', 'da km', 'km min', 'da']),
+      a: trova(['km a', 'a km', 'km max', 'a']), ekm: trova(['euro km', 'eur km', '€ km', '€/km', 'euro/km', 'tariffa km', 'costo km']),
+      fisso: trova(['euro fisso', '€ fisso', 'fisso', 'euro viaggio', '€ viaggio', 'costo viaggio', 'importo']) };
+    if (c.da < 0 || (c.ekm < 0 && c.fisso < 0)) throw new Error('Colonne del tariffario non riconosciute: servono almeno "km da" e "€/km" o "€ fisso". Intestazioni: ' + righe[iHdr].join(' | '));
+    var out = [];
+    righe.slice(iHdr + 1).forEach(function (r) {
+      if (!r || r.every(function (x) { return String(x == null ? '' : x).trim() === ''; })) return;
+      var v = function (i) { return i < 0 ? '' : String(r[i] == null ? '' : r[i]).trim(); };
+      out.push({ anno: v(c.anno) ? Math.round(num(v(c.anno), 'anno')) : null, mezzo: v(c.mezzo) || '*', km_da: num(v(c.da) || '0', 'km da'),
+        km_a: v(c.a) ? num(v(c.a), 'km a') : null, euro_km: v(c.ekm) ? num(v(c.ekm), '€/km') : 0, euro_fisso: v(c.fisso) ? num(v(c.fisso), '€ fisso') : 0 });
+    });
+    if (!out.length) throw new Error('Nessuna riga di tariffa trovata.');
+    return out;
+  }
+
   /** Righe grezze (array di array) -> {tipo, validi, scartati, ...}. Riconosce l'anagrafica con volumi e i carichi giornalieri. */
   function preparaImport(righe) {
+    var iV = righe.findIndex(function (r) { var c = r ? colonneViaggi(r) : {}; return c.viaggio !== undefined && c.codice !== undefined && c.data !== undefined; });
+    if (iV >= 0) return preparaViaggi(righe, iV);
     var iHdr = righe.findIndex(function (r) { return r && r.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }) && mappaColonne(r).codice !== undefined; });
     if (iHdr < 0) iHdr = righe.findIndex(function (r) { return r && r.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }); });
     if (iHdr < 0) throw new Error('Il file è vuoto.');
@@ -442,6 +727,7 @@
     chiaveCoord: chiaveCoord, metriche: metriche, delta: delta, weiszfeld: weiszfeld, pesiOttimo: pesiOttimo,
     tabella: tabella, riepilogo: riepilogo, estrazione: estrazione, csv: csv, mappaColonne: mappaColonne,
     preparaImport: preparaImport, leggiCSV: leggiCSV, aBlocchi: aBlocchi, arr: arr,
-    volumePV: volumePV, volumi: volumi, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
+    volumePV: volumePV, volumi: volumi, costoViaggio: costoViaggio, normTesto: normTesto, comuneDaEtichetta: comuneDaEtichetta, ricalcolaViaggi: ricalcolaViaggi, riepilogoViaggi: riepilogoViaggi,
+    ottimoViaggi: ottimoViaggi, preparaTariffe: preparaTariffe, righeDaExcel: righeDaExcel, tortuosita: tortuosita, estrazioneViaggi: estrazioneViaggi, periodoViaggi: periodoViaggi, REPARTI_CODICE: REPARTI_CODICE, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
   };
 });

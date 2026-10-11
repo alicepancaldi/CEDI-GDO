@@ -10,7 +10,10 @@
   var BLOCCO_DB = 500;
 
   var sb = null;
-  var S = { P: null, sedi: {}, pv: [], dist: [], carichi: [], reparti: {}, vol: null, ultimiErroriDist: [], importPronto: null };
+  var S = { P: null, sedi: {}, pv: [], dist: [], carichi: [], reparti: {}, vol: null, viaggi: [], tariffe: [], ultimiErroriDist: [], importPronto: null };
+  function conViaggi() { return S.viaggi.length > 0; }
+  function mappaPV() { var m = {}; S.pv.forEach(function (p) { m[p.codice] = p; }); return m; }
+  function ricalcoloViaggi() { return C.ricalcolaViaggi(S.viaggi, S.sedi, S.dist, mappaPV(), S.P, S.tariffe); }
 
   /* ============================ utilità ============================ */
   function $(id) { return document.getElementById(id); }
@@ -110,11 +113,13 @@
 
   async function caricaDati() {
     var r = await Promise.all([leggiTutto('parametri', ['id']), leggiTutto('sedi', ['codice']), leggiTutto('punti_vendita', ['codice']), leggiTutto('distanze', ['pv', 'sede']),
-      leggiTutto('carichi', ['pv', 'data', 'reparto']), leggiTutto('reparti', ['reparto'])]);
+      leggiTutto('carichi', ['pv', 'data', 'reparto']), leggiTutto('reparti', ['reparto']),
+      leggiTutto('viaggi', ['id']), leggiTutto('viaggi_clienti', ['viaggio', 'pv']), leggiTutto('tariffe', ['anno', 'mezzo', 'km_da'])]);
     if (!r[0].length) throw new Error('Tabella "parametri" vuota: eseguire supabase/schema.sql.');
     var p = r[0][0];
     S.P = { euro_km: Number(p.euro_km), km_fatturati: p.km_fatturati, capacita_pallet: Number(p.capacita_pallet), costo_fisso_viaggio: Number(p.costo_fisso_viaggio),
-      settimane_anno: Number(p.settimane_anno), giorni_settimana: p.giorni_settimana == null ? 6 : Number(p.giorni_settimana) };
+      settimane_anno: Number(p.settimane_anno), giorni_settimana: p.giorni_settimana == null ? 6 : Number(p.giorni_settimana),
+      anno_tariffa: p.anno_tariffa == null ? null : Number(p.anno_tariffa) };
     S.sedi = {};
     r[1].forEach(function (s) {
       S.sedi[s.codice] = { codice: s.codice, nome: s.nome, indirizzo: s.indirizzo || '', lat: s.lat == null ? null : Number(s.lat), lng: s.lng == null ? null : Number(s.lng),
@@ -128,6 +133,17 @@
     r[5].forEach(function (x) { S.reparti[x.reparto] = x.colli_per_pallet == null ? null : Number(x.colli_per_pallet); });
     S.carichi.forEach(function (c) { if (!(c.reparto in S.reparti)) S.reparti[c.reparto] = null; });
     ricalcolaVolumi();
+    var perViaggio = {};
+    r[7].forEach(function (c) {
+      (perViaggio[c.viaggio] = perViaggio[c.viaggio] || []).push({ pv: String(c.pv), occ: Number(c.occ), colli: Number(c.colli), kmZona: c.km_zona == null ? null : Number(c.km_zona) });
+    });
+    S.viaggi = r[6].map(function (v) {
+      return { id: v.id, data: String(v.data).slice(0, 10), giro: v.giro || '', vettore: v.vettore || '', mezzo: v.mezzo || '',
+        capPallet: v.cap_pallet == null ? null : Number(v.cap_pallet), capRoll: v.cap_roll == null ? null : Number(v.cap_roll), clienti: perViaggio[v.id] || [] };
+    }).filter(function (v) { return v.clienti.length; });
+    S.tariffe = r[8].map(function (t) {
+      return { id: t.id, anno: Number(t.anno), mezzo: t.mezzo || '*', km_da: Number(t.km_da), km_a: t.km_a == null ? null : Number(t.km_a), euro_km: Number(t.euro_km), euro_fisso: Number(t.euro_fisso) };
+    });
   }
 
   /* ============================ OpenRouteService (via funzione Supabase) ============================ */
@@ -177,6 +193,9 @@
     var provPos = C.provinciaDaEtichetta(pos.etichetta);
     var c = await centroComune(comune);
     var cValido = c && (!prov || C.provinciaDaEtichetta(c.indirizzo) === prov);
+    // sigla di provincia diversa ma comune giusto (es. province ridisegnate: Cutro era CZ, oggi KR): la posizione va bene
+    var nomeComune = C.normTesto(comune.replace(/\(.*\)/, ''));
+    if (prov && provPos && provPos !== prov && nomeComune && C.normTesto(C.comuneDaEtichetta(pos.etichetta)) === nomeComune) return pos;
     if (prov && provPos && provPos !== prov) {
       if (cValido) return { lat: c.lat, lng: c.lng, geocodifica: 'fuori_comune', etichetta: c.indirizzo + ' (per la via era stato trovato un punto in provincia di ' + provPos + ': usato il centro del comune)' };
       return { lat: pos.lat, lng: pos.lng, geocodifica: 'provincia_errata', etichetta: pos.etichetta + ' (provincia diversa da ' + prov + ': inserire le coordinate)' };
@@ -269,6 +288,7 @@
     $('pSett').value = p.settimane_anno;
     $('pGiorni').value = p.giorni_settimana;
     disegnaReparti();
+    disegnaTariffe();
     $('pvLista').innerHTML = S.pv.map(function (x) { return '<option value="' + esc(x.codice) + '">' + esc(x.nome) + '</option>'; }).join('');
     $('sediForm').innerHTML = ['ATTUALE', 'OPZ1', 'OPZ2', 'OPZ3'].map(function (c) {
       var s = S.sedi[c], pr = s.lat != null ? precisione(s.geocodifica) : null;
@@ -283,6 +303,49 @@
     $('ottimoInfo').textContent = o.lat != null ? o.indirizzo + '  (' + coordTesto(o) + ')' : 'Non calcolato';
     if (schedaCorrente === 'riep') disegnaRiepilogo();
   }
+
+  function anniTariffe() { return S.tariffe.map(function (t) { return t.anno; }).filter(function (a, i, x) { return x.indexOf(a) === i; }).sort(); }
+  function annoTariffaInUso() { var a = anniTariffe(); return S.P.anno_tariffa && a.indexOf(S.P.anno_tariffa) >= 0 ? S.P.anno_tariffa : a[a.length - 1]; }
+
+  function disegnaTariffe() {
+    var anni = anniTariffe(), h;
+    if (!anni.length) h = '<p class="muted">Nessun tariffario inserito: i costi sono calcolati con la tariffa €/km dei parametri.</p>';
+    else {
+      var inUso = annoTariffaInUso();
+      h = '<div class="grid"><label>Tariffario in uso<select id="selAnnoTariffa">' + anni.map(function (a) { return '<option value="' + a + '"' + (a === inUso ? ' selected' : '') + '>' + a + '</option>'; }).join('') +
+        '</select></label></div><div class="scroll"><table><thead><tr><th>Anno</th><th>Mezzo</th><th>Km da</th><th>Km a</th><th>€/km</th><th>€ fisso</th></tr></thead><tbody>' +
+        S.tariffe.filter(function (t) { return t.anno === inUso; }).sort(function (a, b) { return (a.mezzo > b.mezzo ? 1 : a.mezzo < b.mezzo ? -1 : 0) || a.km_da - b.km_da; }).map(function (t) {
+          return '<tr><td>' + t.anno + '</td><td>' + esc(t.mezzo === '*' ? 'tutti' : t.mezzo) + '</td><td>' + fmt(t.km_da, 0) + '</td><td>' + (t.km_a == null ? 'oltre' : fmt(t.km_a, 0)) + '</td><td>' + fmt(t.euro_km, 3) + '</td><td>' + fmt(t.euro_fisso, 2) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    $('tariffeInfo').innerHTML = h;
+  }
+  $('tariffeInfo').addEventListener('change', function (ev) {
+    if (ev.target.id !== 'selAnnoTariffa') return;
+    var a = Number(ev.target.value);
+    esegui(async function () {
+      await aggiorna('parametri', 'id', 1, { anno_tariffa: a, aggiornato_il: new Date().toISOString() });
+      S.P.anno_tariffa = a; disegnaTutto(); msg('Tariffario ' + a + ' in uso.', 'ok');
+    }).catch(function () {});
+  });
+  $('fileTariffe').addEventListener('change', function () {
+    var f = this.files && this.files[0]; if (!f) return;
+    var input = this;
+    esegui(async function () {
+      var righe = await leggiEPrepara(f, 'tariffe');
+      var annoTxt = $('annoTariffe').value.trim();
+      var annoDef = annoTxt ? Math.round(C.num(annoTxt, 'anno')) : null;
+      righe.forEach(function (t) { if (!t.anno) t.anno = annoDef; });
+      if (righe.some(function (t) { return !(t.anno >= 2000 && t.anno <= 2100); })) throw new Error('Indicare l\'anno di validità del tariffario (colonna "anno" nel file oppure campo Anno).');
+      var anni = righe.map(function (t) { return t.anno; }).filter(function (a, i, x) { return x.indexOf(a) === i; });
+      var rr = await sb.from('tariffe').delete().in('anno', anni);
+      if (rr.error) throw errDb(rr.error);
+      var ins = await sb.from('tariffe').insert(righe);
+      if (ins.error) throw errDb(ins.error);
+      await caricaDati(); disegnaTutto();
+      msg('Tariffario ' + anni.join(', ') + ' caricato: ' + righe.length + ' righe.', 'ok');
+    }, 'Caricamento del tariffario…').catch(function () {}).then(function () { input.value = ''; });
+  });
 
   function disegnaReparti() {
     var nomi = Object.keys(S.reparti).sort();
@@ -379,6 +442,7 @@
   }
 
   function disegnaConfronto(pv, errori) {
+    if (conViaggi()) return disegnaConfrontoViaggi(pv, errori);
     var m = mappaDist();
     var col = sediAttive().map(function (c) {
       var d = m[c + '#' + pv.codice];
@@ -418,8 +482,67 @@
     $('confronto').innerHTML = h;
   }
 
+  function disegnaConfrontoViaggi(pv, errori) {
+    var m = mappaDist(), R = ricalcoloViaggi();
+    var col = R.attive.map(function (c) {
+      var d = m[c + '#' + pv.codice], ok = d && d.chiave === C.chiaveCoord(S.sedi[c], pv);
+      return { codice: c, nome: S.sedi[c].nome, indirizzo: S.sedi[c].indirizzo, d: ok ? d : null, x: R.perPV[c][pv.codice] || null };
+    });
+    if (!col.length) { $('confronto').innerHTML = '<span class="muted">Nessuna sede configurata: compilare la scheda Configurazione.</span>'; return; }
+    var att = col.filter(function (c) { return c.codice === 'ATTUALE'; })[0];
+    var righe = [
+      ['Km stradali mezzi pesanti (andata)', function (c) { return c.d ? fmt(c.d.km, 1) : '—'; }],
+      ['Tempo di guida (andata)', function (c) { return c.d ? fmt(c.d.minuti, 0) + ' min' : '—'; }],
+      ['Viaggi che lo servono nel periodo', function (c) { return c.x ? fmt(c.x.viaggi, 0) : '—'; }],
+      ['Carico nel periodo (unità)', function (c) { return c.x ? fmt(c.x.occ, 1) : '—'; }],
+      ['Costo ripartito nel periodo', function (c) { return c.x ? eur(c.x.costo, 0) : '—'; }],
+      ['Costo ripartito / anno', function (c) { return c.x ? eur(c.x.costoAnno, 0) : '—'; }],
+      null,
+      ['Δ km vs attuale', function (c) { return c.codice !== 'ATTUALE' && c.d && att && att.d ? segno(c.d.km - att.d.km, 1) : ''; }],
+      ['Δ costo / anno', function (c) { return c.codice !== 'ATTUALE' && c.x && att && att.x ? segno(c.x.costoAnno - att.x.costoAnno, 0, ' €') : ''; }],
+      ['Δ % costo', function (c) { return c.codice !== 'ATTUALE' && c.x && att && att.x && att.x.costoAnno ? segno((c.x.costoAnno - att.x.costoAnno) / att.x.costoAnno * 100, 1, ' %') : ''; }]
+    ];
+    var pr = precisione(pv.geocodifica);
+    var nV = 0; col.forEach(function (c) { if (c.x) nV = Math.max(nV, c.x.viaggi); });
+    var h = '<h2>' + esc(pv.codice + (pv.nome ? ' – ' + pv.nome : '')) + '</h2>' +
+      '<p class="muted">' + esc(pv.indirizzo) + ' · <span class="' + (pr.livello === 'ok' ? '' : 'avviso') + '">' + esc(pr.testo) + '</span> · ' +
+      (nV ? 'servito da ' + nV + ' viaggi reali nel periodo; il costo di ogni viaggio è ripartito tra i clienti in base al carico' : '<span class="avviso">nessun viaggio nel periodo importato</span>') + '</p>' +
+      '<div class="scroll"><table><thead><tr><th></th>' + col.map(function (c) {
+        return '<th>' + esc(c.nome) + '<span class="sub">' + esc(c.indirizzo) + '</span></th>';
+      }).join('') + '</tr></thead><tbody>' + righe.map(function (rg) {
+        if (!rg) return '<tr class="sep"><td colspan="' + (col.length + 1) + '">Scostamenti rispetto al CEDI attuale</td></tr>';
+        return '<tr><td>' + rg[0] + '</td>' + col.map(function (c) { return '<td>' + rg[1](c) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>';
+    if (errori && errori.length) h += '<div class="alert err">' + errori.map(function (e) { return esc(S.sedi[e.sede].nome + ' → ' + e.pv + ': ' + e.motivo); }).join('<br>') + '</div>';
+    $('confronto').innerHTML = h;
+  }
+
+  function disegnaRiepilogoViaggi() {
+    var R = ricalcoloViaggi(), ries = C.riepilogoViaggi(S.sedi, R), per = R.periodo;
+    if (!ries.length) { $('riepilogo').innerHTML = '<span class="muted">Nessuna sede configurata.</span>'; return; }
+    var mancanti = ries.reduce(function (s, x) { return s + x.mancanti; }, 0);
+    var nClienti = {}; S.viaggi.forEach(function (v) { v.clienti.forEach(function (c) { nClienti[c.pv] = true; }); });
+    var anni = anniTariffe();
+    var h = '<p class="muted">Viaggi reali: ' + S.viaggi.length + ' viaggi dal ' + esc(per.dal) + ' al ' + esc(per.al) + ' (' + per.giorni + ' giorni), ' + Object.keys(nClienti).length +
+      ' clienti. Km di ogni viaggio = ' + (S.P.km_fatturati === 'AR' ? 'andata e ritorno' : 'sola andata') + ' fino al cliente più lontano del giro. Costo/anno = periodo × ' + fmt(per.fattoreAnno, 2) + '.<br>' +
+      (anni.length ? 'Tariffario ' + annoTariffaInUso() + '.' : '<span class="avviso">Tariffario non inserito: costi calcolati con ' + fmt(S.P.euro_km, 2) + ' €/km dei parametri.</span>') + '</p>';
+    if (mancanti) h += '<div class="alert warn">' + mancanti + ' calcoli di viaggio non possibili per distanze mancanti: i totali non sono ancora confrontabili. Premere "Aggiorna distanze".</div>';
+    h += '<div class="scroll"><table><thead><tr><th>Sede</th><th>Viaggi</th><th>Km fatturati nel periodo</th><th>Costo nel periodo</th><th>Costo / anno</th>' +
+      '<th>Δ costo / anno vs attuale</th><th>Δ %</th><th>Δ km nel periodo</th><th>Sopra l\'ottimo</th></tr></thead><tbody>' +
+      ries.map(function (s) {
+        return '<tr><td><b>' + esc(s.nome) + '</b><span class="sub">' + esc(s.indirizzo) + '</span></td>' +
+          '<td>' + fmt(s.viaggi, 0) + '</td><td>' + fmt(s.km, 0) + '</td><td>' + eur(s.costo) + '</td><td>' + eur(s.costoAnno) + '</td>' +
+          '<td>' + (s.deltaAnno == null ? '' : segno(s.deltaAnno, 0, ' €')) + '</td>' +
+          '<td>' + (s.deltaPct == null ? '' : segno(s.deltaPct, 1, ' %')) + '</td>' +
+          '<td>' + (s.deltaKm == null ? '' : segno(s.deltaKm, 0)) + '</td>' +
+          '<td>' + (s.sopraOttimo == null ? '' : eur(s.sopraOttimo)) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+    $('riepilogo').innerHTML = h;
+  }
+
   /* ============================ maschera 2 ============================ */
   function disegnaRiepilogo() {
+    if (conViaggi()) { disegnaRiepilogoViaggi(); disegnaQualita(); return; }
     var t = C.tabella(S.P, S.sedi, S.pv, S.dist);
     var ries = C.riepilogo(S.P, S.sedi, t);
     if (!ries.length) { $('riepilogo').innerHTML = '<span class="muted">Nessuna sede configurata.</span>'; $('qualita').innerHTML = ''; return; }
@@ -441,7 +564,10 @@
           '<td>' + (s.sopraOttimo == null ? '' : eur(s.sopraOttimo)) + '</td></tr>';
       }).join('') + '</tbody></table></div>';
     $('riepilogo').innerHTML = h;
+    disegnaQualita();
+  }
 
+  function disegnaQualita() {
     var dubbi = S.pv.filter(function (p) { return precisione(p.geocodifica).livello !== 'ok'; });
     var q = '';
     if (dubbi.length) {
@@ -495,7 +621,10 @@
     }, 'Verifica delle posizioni…').catch(function () { $('prog').textContent = ''; });
   });
 
-  function datiEstrazione() { return C.estrazione(S.P, S.sedi, C.tabella(S.P, S.sedi, S.pv, S.dist)); }
+  function datiEstrazione() {
+    if (conViaggi()) return C.estrazioneViaggi(S.sedi, ricalcoloViaggi(), mappaPV());
+    return C.estrazione(S.P, S.sedi, C.tabella(S.P, S.sedi, S.pv, S.dist));
+  }
   function oggi() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 
   $('btnCsv').addEventListener('click', function () {
@@ -521,13 +650,21 @@
         });
         return ws;
       }
-      foglio('Riepilogo', d.intestazioneRiepilogo, d.riepilogo, [null, null, '0.0', '#,##0', '#,##0', '#,##0', '0.0', '#,##0']);
-      foglio('Dettaglio', d.intestazione, d.righe, [null, null, null, '0.0', '0.0', '0.0', '0.0', '#,##0.00', '#,##0', '#,##0', '0.0']);
-      foglio('Parametri', ['Parametro', 'Valore'], [
+      if (d.viaggi) {
+        foglio('Riepilogo', d.intestazioneRiepilogo, d.riepilogo, [null, null, '#,##0', '#,##0', '#,##0', '#,##0', '#,##0', '0.0', '#,##0']);
+        foglio('Dettaglio PV', d.intestazione, d.righe, [null, null, null, '#,##0', '#,##0', '#,##0', '#,##0', '0.0']);
+        foglio('Viaggi', d.intestazioneViaggi, d.viaggi, null);
+      } else {
+        foglio('Riepilogo', d.intestazioneRiepilogo, d.riepilogo, [null, null, '0.0', '#,##0', '#,##0', '#,##0', '0.0', '#,##0']);
+        foglio('Dettaglio', d.intestazione, d.righe, [null, null, null, '0.0', '0.0', '0.0', '0.0', '#,##0.00', '#,##0', '#,##0', '0.0']);
+      }
+      var per = conViaggi() ? C.periodoViaggi(S.viaggi) : null;
+      foglio('Parametri', ['Parametro', 'Valore'], (per ? [['Metodo', 'Ricalcolo dei viaggi reali da ogni sede'], ['Periodo viaggi', per.dal + ' – ' + per.al + ' (' + per.giorni + ' giorni)'],
+        ['Viaggi', S.viaggi.length], ['Tariffario', S.tariffe.length ? 'anno ' + annoTariffaInUso() : 'non inserito (€/km dei parametri)']] : []).concat([
         ['Tariffa €/km', S.P.euro_km], ['Km fatturati', S.P.km_fatturati === 'AR' ? 'andata e ritorno' : 'solo andata'],
         ['Capacità mezzo standard (pallet)', S.P.capacita_pallet], ['Costo fisso per viaggio €', S.P.costo_fisso_viaggio],
         ['Settimane operative/anno', S.P.settimane_anno], ['Distanze', 'OpenRouteService, profilo mezzi pesanti'], ['Data estrazione', oggi()]
-      ]).getColumn(1).width = 34;
+      ])).getColumn(1).width = 34;
       var buf = await wb.xlsx.writeBuffer();
       scarica('simulazione_cedi_' + oggi() + '.xlsx', new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       msg('File Excel generato.', 'ok');
@@ -581,7 +718,12 @@
 
   $('btnOttimo').addEventListener('click', function () {
     esegui(async function () {
-      var o = C.weiszfeld(C.pesiOttimo(S.pv, S.P));
+      var o;
+      if (conViaggi()) {
+        var coord = {};
+        S.pv.forEach(function (p) { if (precisione(p.geocodifica).livello !== 'err') coord[p.codice] = { lat: p.lat, lng: p.lng }; });
+        o = C.ottimoViaggi(S.viaggi, coord, S.P, S.tariffe, C.tortuosita(S.sedi.ATTUALE, S.dist, mappaPV()));
+      } else o = C.weiszfeld(C.pesiOttimo(S.pv, S.P));
       var ind = null;
       try { var r = await ors('inversa', { lat: o.lat, lng: o.lng }); ind = r && r.indirizzo; } catch (e) { /* solo descrittivo */ }
       ind = ind || coordTesto(o);
@@ -592,49 +734,34 @@
       disegnaTutto();
       var es = await calcolaDistanze(coppieMancanti(S.pv).filter(function (c) { return c.sede === 'OTTIMO'; }), function (k, n) { $('prog').textContent = 'Distanze dall\'ottimo: richiesta ' + k + ' di ' + n; });
       $('prog').textContent = '';
-      msg('Punto di ottimo calcolato su ' + S.pv.length + ' punti vendita: ' + esc(ind) + ' (' + esc(coordTesto(o)) + '). ' +
+      msg('Punto di ottimo calcolato ' + (conViaggi() ? 'sui ' + S.viaggi.length + ' viaggi reali' : 'su ' + S.pv.length + ' punti vendita') + ': ' + esc(ind) + ' (' + esc(coordTesto(o)) + '). ' +
         (es.errori.length ? es.errori.length + ' distanze non trovate.' : 'Distanze calcolate: vedere il riepilogo.'), es.errori.length ? 'warn' : 'ok');
     }, 'Calcolo del punto di ottimo…').catch(function () {});
   });
 
   /* ============================ import ============================ */
-  function valoreCella(v) {
-    if (v == null) return '';
-    if (v instanceof Date) return v.toISOString().slice(0, 10);
-    if (typeof v === 'object') {
-      if (v.richText) return v.richText.map(function (t) { return t.text; }).join('');
-      if (v.text !== undefined) return String(v.text);
-      if (v.result !== undefined) return valoreCella(v.result);
-      if (v.error) return '';
-      return String(v);
-    }
-    return v;
-  }
-
-  async function leggiFile(file) {
+  /** Legge un file (Excel o CSV) e lo prepara: tipo 'tariffe' per il tariffario, altrimenti riconoscimento automatico. */
+  async function leggiEPrepara(file, tipo) {
     var nome = file.name.toLowerCase();
-    if (/\.xlsx$/.test(nome)) {
-      var wb = new window.ExcelJS.Workbook();
-      await wb.xlsx.load(await file.arrayBuffer());
-      var ws = wb.worksheets.filter(function (w) { return w.actualRowCount > 0; })[0];
-      if (!ws) throw new Error('Il file Excel non contiene dati.');
-      var righe = [];
-      ws.eachRow({ includeEmpty: true }, function (row, n) {
-        var r = [];
-        for (var c = 1; c <= ws.columnCount; c++) r.push(valoreCella(row.getCell(c).value));
-        righe[n - 1] = r;
-      });
-      for (var i = 0; i < righe.length; i++) if (!righe[i]) righe[i] = [];
-      return righe;
-    }
+    var prepara = function (righe) { return tipo === 'tariffe' ? C.preparaTariffe(righe) : C.preparaImport(righe); };
     if (/\.(csv|txt)$/.test(nome)) {
-      var buf = await file.arrayBuffer();
-      var testo = new TextDecoder('utf-8').decode(buf);
-      if (testo.indexOf('�') >= 0) testo = new TextDecoder('windows-1252').decode(buf);
-      return C.leggiCSV(testo);
+      var b = await file.arrayBuffer();
+      var testo = new TextDecoder('utf-8').decode(b);
+      if (testo.indexOf('�') >= 0) testo = new TextDecoder('windows-1252').decode(b);
+      return prepara(C.leggiCSV(testo));
     }
-    if (/\.xls$/.test(nome)) throw new Error('Formato .xls non supportato: salvare il file come .xlsx o .csv.');
-    throw new Error('Formato non riconosciuto: usare .xlsx o .csv.');
+    if (!/\.(xlsx|xlsm|xls)$/.test(nome)) throw new Error('Formato non riconosciuto: usare .xlsx, .xls o .csv.');
+    var buf = await file.arrayBuffer();
+    if (window.Worker && !CFG.SENZA_WORKER) {
+      return await new Promise(function (ok, ko) {
+        var w;
+        try { w = new Worker('js/lettore-worker.js?v=4'); } catch (e) { ko(e); return; }
+        w.onmessage = function (e) { w.terminate(); if (e.data.ok) ok(e.data.risultato); else ko(new Error(e.data.errore)); };
+        w.onerror = function (e) { w.terminate(); ko(new Error('Lettura del file non riuscita' + (e && e.message ? ': ' + e.message : ''))); };
+        w.postMessage({ buffer: buf, tipo: tipo || '' }, [buf]);
+      });
+    }
+    return prepara(C.righeDaExcel(window.XLSX, new Uint8Array(buf)));
   }
 
   function csvProblemi(lista) {
@@ -646,13 +773,31 @@
     var f = this.files && this.files[0]; if (!f) return;
     var input = this;
     esegui(async function () {
-      var righe = await leggiFile(f);
-      var prep = C.preparaImport(righe);
+      var prep = await leggiEPrepara(f);
       S.importPronto = prep;
       var nuovi = prep.validi.filter(function (v) { return !trovaPV(v.codice); }).length;
       var giorn = prep.tipo === 'giornaliero';
       var h = '<h3>' + esc(f.name) + '</h3>';
-      if (giorn) {
+      if (prep.tipo === 'viaggi') {
+        // dai viaggi si aggiungono solo i clienti non ancora presenti; quelli esistenti restano come sono
+        prep.validi = prep.validi.filter(function (v) { return !trovaPV(v.codice); });
+        var nCli = prep.viaggi.reduce(function (s, v) { return s + v.clienti.length; }, 0);
+        var conCap = prep.viaggi.filter(function (v) { return v.capPallet > 0; });
+        var sat = conCap.reduce(function (s, v) { return s + v.clienti.reduce(function (a, c) { return a + c.occ; }, 0) / v.capPallet; }, 0) / (conCap.length || 1);
+        var esist = S.viaggi.filter(function (v) { return v.data >= prep.dal && v.data <= prep.al; }).length;
+        h += '<p><b>Viaggi reali</b>: ' + prep.viaggi.length + ' viaggi dal ' + esc(prep.dal) + ' al ' + esc(prep.al) + ', ' + fmt(nCli / prep.viaggi.length, 1) + ' clienti per viaggio in media, ' +
+          'saturazione media dei mezzi ' + fmt(sat * 100, 0) + '%. Clienti nuovi da geolocalizzare: ' + prep.validi.length + '.' +
+          (esist ? ' I ' + esist + ' viaggi già presenti nello stesso periodo verranno sostituiti.' : '') + '</p>' +
+          '<p class="muted">Dal file vengono acquisiti solo viaggio, data, giro, vettore, mezzo, clienti e carichi; nessun dato di autisti, targhe o telefoni.</p>' +
+          '<div class="scroll"><table><thead><tr><th>Viaggio</th><th>Data</th><th>Giro</th><th>Vettore</th><th>Mezzo</th><th>Clienti</th><th>Carico / capacità</th></tr></thead><tbody>' +
+          prep.viaggi.slice(0, 10).map(function (v) {
+            var occ = v.clienti.reduce(function (a, c) { return a + c.occ; }, 0);
+            return '<tr><td>' + esc(v.id) + '</td><td>' + esc(v.data) + '</td><td>' + esc(v.giro) + '</td><td class="testo">' + esc(v.vettore) + '</td><td>' + esc(v.mezzo) + '</td><td class="testo">' +
+              esc(v.clienti.map(function (c) { return c.pv; }).join(', ')) + '</td><td>' + fmt(occ, 1) + (v.capPallet ? ' / ' + fmt(v.capPallet, 0) : '') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' + (prep.viaggi.length > 10 ? '<p class="muted">… e altri ' + (prep.viaggi.length - 10) + ' viaggi.</p>' : '') +
+          '<button class="btn" id="btnConfermaImport">Importa ' + prep.viaggi.length + ' viaggi</button>';
+        prep.validi.forEach(function (v) { prep.avvisi.push({ riga: v.riga, codice: v.codice, motivo: 'cliente non presente in anagrafica: verrà aggiunto (' + v.nome + ', ' + v.indirizzo + ')' }); });
+      } else if (giorn) {
         var perPV = {};
         prep.carichi.forEach(function (c) { var x = perPV[c.pv] = perPV[c.pv] || { giorni: {}, colli: 0 }; x.giorni[c.data] = true; x.colli += c.colli; });
         prep.validi.forEach(function (v) { var x = perPV[v.codice]; v.nGiorni = x ? Object.keys(x.giorni).length : 0; v.colli = x ? x.colli : 0; });
@@ -662,7 +807,7 @@
       } else {
         h += '<p>' + prep.validi.length + ' righe valide (' + nuovi + ' nuovi punti vendita, ' + (prep.validi.length - nuovi) + ' aggiornamenti) · ' + prep.scartati.length + ' righe scartate.</p>';
       }
-      if (prep.validi.length) {
+      if (prep.validi.length && prep.tipo !== 'viaggi') {
         h += '<div class="scroll"><table><thead><tr><th>Riga</th><th>Codice</th><th>Nome</th><th>Indirizzo</th>' +
           (giorn ? '<th>Giorni con carico</th><th>Colli totali</th>' : '<th>Pallet/sett.</th><th>Consegne/sett.</th>') + '</tr></thead><tbody>' +
           prep.validi.slice(0, 10).map(function (v) {
@@ -675,7 +820,7 @@
       var segn = prep.scartati.concat(prep.avvisi || []);
       prep.scartati = segn;
       if (segn.length) {
-        h += '<h3 class="avviso">' + (giorn ? 'Segnalazioni (' + segn.length + ')' : 'Righe scartate') + '</h3><div class="scroll"><table><tbody>' +
+        h += '<h3 class="avviso">' + (prep.tipo !== 'anagrafica' ? 'Segnalazioni (' + segn.length + ')' : 'Righe scartate') + '</h3><div class="scroll"><table><tbody>' +
           segn.slice(0, 20).map(function (s) { return '<tr><td>Riga ' + s.riga + '</td><td>' + esc(s.codice) + '</td><td class="testo">' + esc(s.motivo) + '</td></tr>'; }).join('') +
           '</tbody></table></div>' + (segn.length > 20 ? '<p class="muted">… e altre ' + (segn.length - 20) + '.</p>' : '') + '<button class="btn sec" id="btnScarti">Scarica elenco (CSV)</button>';
       }
@@ -715,7 +860,26 @@
         if (pronti.length % 50 === 0) await salvaImport(pronti.slice(-50));
       }
       await salvaImport(pronti.slice(pronti.length - pronti.length % 50)); // ultimi non ancora salvati
-      var nCarichi = 0;
+      var nCarichi = 0, nViaggi = 0, scartatiViaggi = 0;
+      if (prep.tipo === 'viaggi') {
+        msg('Salvataggio dei viaggi…', 'info');
+        var rv = await sb.from('viaggi').delete().gte('data', prep.dal).lte('data', prep.al);
+        if (rv.error) throw errDb(rv.error);
+        var esistentiV = {}; S.pv.forEach(function (p) { esistentiV[p.codice] = true; });
+        var righeV = [], righeC = [];
+        prep.viaggi.forEach(function (v) {
+          var cl = v.clienti.filter(function (c) { return esistentiV[c.pv]; });
+          if (cl.length < v.clienti.length) scartatiViaggi++;
+          if (!cl.length) return;
+          righeV.push({ id: v.id, data: v.data, giro: v.giro, vettore: v.vettore, mezzo: v.mezzo, cap_pallet: v.capPallet, cap_roll: v.capRoll });
+          cl.forEach(function (c) { righeC.push({ viaggio: v.id, pv: c.pv, occ: Math.round(c.occ * 1000) / 1000, colli: c.colli, km_zona: c.kmZona }); });
+        });
+        await upsert('viaggi', righeV, 'id');
+        await upsert('viaggi_clienti', righeC, 'viaggio,pv');
+        nViaggi = righeV.length;
+        if (scartatiViaggi) problemi.push({ riga: '', codice: '', motivo: scartatiViaggi + ' viaggi con almeno un cliente non geolocalizzato: quel cliente è escluso dal calcolo del viaggio' });
+        await caricaDati();
+      }
       if (prep.tipo === 'giornaliero') {
         msg('Salvataggio dei carichi giornalieri…', 'info');
         if (sostituisci) { var rr = await sb.from('carichi').delete().gte('data', '1900-01-01'); if (rr.error) throw errDb(rr.error); }
@@ -727,9 +891,10 @@
         await caricaDati();
       }
       S.importProblemi = problemi.concat(prep.tipo === 'giornaliero' ? (prep.avvisi || []) : []);
+      if (prep.tipo === 'viaggi') S.importProblemi = problemi;
       problemi = S.importProblemi;
       disegnaTutto();
-      var h = '<p><b>Import completato:</b> ' + pronti.length + ' punti vendita salvati' + (nCarichi ? ', ' + nCarichi + ' righe di carico' : '') + (problemi.length ? ', ' + problemi.length + ' segnalazioni.' : '.') + '</p>';
+      var h = '<p><b>Import completato:</b> ' + (nViaggi ? nViaggi + ' viaggi salvati, ' + pronti.length + ' nuovi clienti' : pronti.length + ' punti vendita salvati') + (nCarichi ? ', ' + nCarichi + ' righe di carico' : '') + (problemi.length ? ', ' + problemi.length + ' segnalazioni.' : '.') + '</p>';
       if (S.vol && S.vol.repartiSenzaFattore.length) h += '<div class="alert warn">Inserire i fattori colli → pallet (sezione sopra) per: ' + S.vol.repartiSenzaFattore.map(esc).join(', ') + '.</div>';
       if (problemi.length) {
         h += '<div class="scroll"><table><tbody>' + problemi.slice(0, 30).map(function (s) { return '<tr><td>Riga ' + s.riga + '</td><td>' + esc(s.codice) + '</td><td class="testo">' + esc(s.motivo) + '</td></tr>'; }).join('') +
