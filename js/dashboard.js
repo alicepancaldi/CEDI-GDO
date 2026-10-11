@@ -44,11 +44,11 @@
 
   /** Barre orizzontali attorno allo zero (Interporto = 0), area grigia, legenda a destra. */
   function barreDelta(righe, valore, etichetta, titolo, unita) {
-    var w = 860, sx = 20, larg = 600, top = 34, alt = 34, h = top + righe.length * (alt + 14) + 40;
+    var w = 870, sx = 160, larg = 510, top = 34, alt = 34, h = top + righe.length * (alt + 14) + 40;
     var vals = righe.map(valore), lo = Math.min(0, Math.min.apply(null, vals)), hi = Math.max(0, Math.max.apply(null, vals));
-    var pad = (hi - lo) * 0.18 || 1; lo = lo < 0 ? lo - pad : lo; hi = hi > 0 ? hi + pad : hi;
+    var pad = (hi - lo) * 0.3 || 1; lo = lo < 0 ? lo - pad : lo; hi = hi > 0 ? hi + pad : hi;
     var x = function (v) { return sx + (v - lo) / (hi - lo) * larg; }, x0 = x(0);
-    var y1 = h - 34, c = testo(sx, 18, titolo, { size: 13, weight: 'bold' });
+    var y1 = h - 34, c = testo(0, 18, titolo, { size: 13, weight: 'bold' });
     c += rett(sx, top - 8, larg, y1 - top + 8, AREA);
     // griglia verticale
     var passo = Math.pow(10, Math.floor(Math.log10((hi - lo) / 4))), k = (hi - lo) / passo > 8 ? 2 : 1; passo *= k;
