@@ -1,4 +1,4 @@
-/* Simulatore CEDI — scheda Dashboard: KPI per sede, confronti, andamento mensile, gasolio, mappa schematica.
+/* Simulatore CEDI — scheda Dashboard: KPI per sede, confronti, andamento mensile, gasolio, mappe su cartina OpenStreetMap (mappa schematica se la cartina non è disponibile).
    Stile dei grafici "Excel 97": area del grafico grigia, serie glicine / prugna / giallino con bordo nero, legenda in riquadro.
    Solo disegno (SVG generato da dati già calcolati): nessun accesso al database. */
 (function (root) {
@@ -160,6 +160,51 @@
     return svg(w, Math.round(h), c, titolo);
   }
 
+  /* ---------- mappe su cartina (Leaflet + OpenStreetMap), con ripiego sulla mappa schematica ---------- */
+  var TILE = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  var ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  var mappeAttive = [];
+
+  function riquadroSedi(sedi, km) {
+    var la = sedi.map(function (q) { return q.lat; }), lo = sedi.map(function (q) { return q.lng; });
+    var dLat = km / 110.574, dLng = km / (111.320 * Math.cos(la[0] * Math.PI / 180));
+    return [[Math.min.apply(null, la) - dLat, Math.min.apply(null, lo) - dLng], [Math.max.apply(null, la) + dLat, Math.max.apply(null, lo) + dLng]];
+  }
+
+  /** Disegna clienti e sedi su cartina reale nel div el; etichette fisse delle sedi solo nella mappa ingrandita. */
+  function mappaGeo(L, el, punti, sedi, limiti, etichette) {
+    var m = L.map(el, { scrollWheelZoom: false, attributionControl: true });
+    L.tileLayer(TILE, { subdomains: 'abcd', maxZoom: 19, attribution: ATTRIB }).addTo(m);
+    L.control.scale({ imperial: false }).addTo(m);
+    var vmax = Math.max.apply(null, punti.map(function (p) { return p.viaggi; }).concat([1]));
+    punti.slice().sort(function (a, b) { return b.viaggi - a.viaggi; }).forEach(function (p) {
+      L.circleMarker([p.lat, p.lng], { radius: 2 + 8 * Math.sqrt(p.viaggi / vmax), color: '#000000', weight: 0.7, fillColor: '#FFFFFF', fillOpacity: 0.85 })
+        .bindTooltip(esc(p.codice + ' ' + p.nome) + ': ' + p.viaggi + ' viaggi').addTo(m);
+    });
+    sedi.forEach(function (s) {
+      var icona = L.divIcon({ className: 'sede-geo', iconSize: [16, 16], iconAnchor: [8, 8], html: '<span style="background:' + colore(s.codice) + '"></span>' });
+      L.marker([s.lat, s.lng], { icon: icona, zIndexOffset: 1000, keyboard: false, title: s.nome })
+        .bindTooltip(esc(s.nome), { permanent: !!etichette, direction: 'right', offset: [8, 0], className: 'etichetta-sede' }).addTo(m);
+    });
+    var adatta = function () { m.invalidateSize(); m.fitBounds(limiti, { padding: [12, 12] }); };
+    adatta();
+    if (root.ResizeObserver) { // la scheda può essere ridisegnata mentre è nascosta: riadatta quando prende dimensione
+      var vista = el.offsetWidth;
+      new root.ResizeObserver(function () { if (el.offsetWidth && el.offsetWidth !== vista) { vista = el.offsetWidth; adatta(); } }).observe(el);
+    }
+    return m;
+  }
+
+  function disegnaMappeGeo(el, D) {
+    var L = root.L, a = el.querySelector('#mappaPuglia'), b = el.querySelector('#mappaBari');
+    if (!L || !a || !b) return;
+    var tutti = D.punti.concat(D.sediPos);
+    var limPuglia = [[Math.min.apply(null, tutti.map(function (p) { return p.lat; })), Math.min.apply(null, tutti.map(function (p) { return p.lng; }))],
+      [Math.max.apply(null, tutti.map(function (p) { return p.lat; })), Math.max.apply(null, tutti.map(function (p) { return p.lng; }))]];
+    mappeAttive.push(mappaGeo(L, a, D.punti, D.sediPos, limPuglia, false));
+    mappeAttive.push(mappaGeo(L, b, D.punti, D.sediPos, riquadroSedi(D.sediPos, 10), true));
+  }
+
   function tessere(sedi) {
     return '<div class="kpi">' + sedi.map(function (s) {
       var d = s.codice === 'ATTUALE';
@@ -186,10 +231,17 @@
       '<p class="muted">Ogni punto è un mese ricalcolato con i suoi viaggi e il suo prezzo del gasolio: linee piatte = risultato stabile.</p></div>';
     h += '<div class="card">' + barreGasolio(D.mesi, D.sedi, D.franchigia, 'Adeguamento gasolio pagato ai vettori, per mese e per sede (€)') + '</div>';
     var Lm = legenda(4, 4, [{ nome: 'Cliente (area ∝ viaggi)', colore: '#FFFFFF', tipo: 'cerchio' }].concat(D.sediPos.map(function (s) { return { nome: s.nome, colore: colore(s.codice), tipo: 'rombo' }; })));
-    h += '<div class="card"><h2>Dove sono clienti e sedi</h2><div class="mappe"><div>' + mappa(D.punti, D.sediPos, 'Mappa schematica') + '</div><div><h3>Area di Bari</h3>' +
-      mappa(D.punti, D.sediPos, 'Mappa ingrandita area di Bari', 10) + '</div></div>' +
-      svg(Lm.w + 8, Lm.h + 8, Lm.svg, 'Legenda della mappa') + '<p class="muted">Proiezione semplificata, senza strade.</p></div>';
+    var geo = !!root.L && !!(root.L.Browser.svg || root.L.Browser.canvas) && D.sediPos.length > 0;
+    h += '<div class="card"><h2>Dove sono clienti e sedi</h2><div class="mappe"><div><h3>Puglia</h3>' +
+      (geo ? '<div id="mappaPuglia" class="mappa-geo" role="img" aria-label="Cartina della Puglia con clienti e sedi"></div>' : mappa(D.punti, D.sediPos, 'Mappa schematica')) +
+      '</div><div><h3>Area di Bari</h3>' +
+      (geo ? '<div id="mappaBari" class="mappa-geo" role="img" aria-label="Cartina ingrandita dell\'area di Bari con le sedi"></div>' : mappa(D.punti, D.sediPos, 'Mappa ingrandita area di Bari', 10)) + '</div></div>' +
+      svg(Lm.w + 8, Lm.h + 8, Lm.svg, 'Legenda della mappa') +
+      '<p class="muted">' + (geo ? 'Cartina OpenStreetMap: passare il mouse su un cerchio per vedere il cliente; zoom con i pulsanti + e −.' : 'Cartina non disponibile (connessione assente): proiezione semplificata, senza strade.') + '</p></div>';
+    mappeAttive.forEach(function (m) { try { m.remove(); } catch (e) { /* già rimossa */ } });
+    mappeAttive = [];
     el.innerHTML = h;
+    if (geo) disegnaMappeGeo(el, D);
   }
 
   root.Dashboard = { disegna: disegna, COLORI: COLORI };

@@ -600,3 +600,28 @@ test('dashboard: più mesi, prezzo mancante, mappa', () => {
   dom.window.Dashboard.disegna(el, null);
   assert.match(el.textContent, /Importare i viaggi reali/);
 });
+
+test('dashboard: mappe su cartina con Leaflet, ridisegno senza perdite', () => {
+  const dom = new JSDOM('<div id="d"></div>', { runScripts: 'outside-only', pretendToBeVisual: true });
+  dom.window.SVGSVGElement.prototype.createSVGRect = () => ({}); // jsdom non ha il rendering SVG: lo dichiariamo per Leaflet
+  dom.window.eval(leggi('js/vendor/leaflet-1.9.4.js'));
+  dom.window.eval(leggi('js/dashboard.js'));
+  const sede = (c, n, dc) => ({ codice: c, nome: n, costoAnno: 7e6, deltaAnno: dc, deltaPct: dc == null ? null : dc / 7e6 * 100, co2Anno: 3500, deltaCo2: dc == null ? null : -10, deltaCo2Pct: dc == null ? null : -0.3, adeguamentoAnno: 2e5 });
+  const D = { periodo: { dal: '2026-05-02', al: '2026-08-31', giorni: 122, viaggi: 10, clienti: 2 },
+    sedi: [sede('ATTUALE', 'Bari Interporto', null), sede('OPZ1', 'Cellamare', -129392)], mesi: [], franchigia: 0.05, mesiMancanti: [], nota: '',
+    punti: [{ codice: '1', nome: 'A & B', lat: 41.1, lng: 16.8, viaggi: 50 }, { codice: '2', nome: 'C', lat: 40.4, lng: 17.9, viaggi: 10 }],
+    sediPos: [{ codice: 'ATTUALE', nome: 'Bari Interporto', lat: 41.08, lng: 16.84 }, { codice: 'OPZ1', nome: 'Cellamare', lat: 41.02, lng: 16.92 }] };
+  const el = dom.window.document.getElementById('d');
+  dom.window.Dashboard.disegna(el, D);
+  assert.ok(el.querySelector('#mappaPuglia.leaflet-container'));
+  assert.ok(el.querySelector('#mappaBari.leaflet-container'));
+  assert.strictEqual(el.querySelectorAll('#mappaBari .sede-geo').length, 2);
+  assert.strictEqual(el.querySelectorAll('#mappaPuglia path.leaflet-interactive').length, 2);
+  assert.match(el.textContent, /OpenStreetMap/);
+  dom.window.Dashboard.disegna(el, D); // secondo disegno: le mappe precedenti vengono rimosse
+  assert.strictEqual(el.querySelectorAll('.leaflet-container').length, 2);
+  delete dom.window.L.Browser.svg; dom.window.L.Browser.svg = false; dom.window.L.Browser.canvas = false; // browser senza SVG né canvas: mappa schematica
+  dom.window.Dashboard.disegna(el, D);
+  assert.strictEqual(el.querySelectorAll('.leaflet-container').length, 0);
+  assert.match(el.textContent, /proiezione semplificata/);
+});
