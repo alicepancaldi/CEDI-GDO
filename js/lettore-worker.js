@@ -1,6 +1,6 @@
 /* Lettura dei file Excel in un thread separato (i file del gestionale possono superare i 15 MB):
    restituisce alla pagina solo il risultato già preparato, non l'intero foglio. */
-importScripts('vendor/xlsx-0.18.5.full.min.js', 'calcolo.js?v=5');
+importScripts('vendor/xlsx-0.18.5.full.min.js', 'calcolo.js?v=6');
 self.onmessage = function (e) {
   try {
     var righe = self.Calcolo.righeDaExcel(self.XLSX, new Uint8Array(e.data.buffer));

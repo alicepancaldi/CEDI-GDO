@@ -515,6 +515,7 @@
         if (!rg) return '<tr class="sep"><td colspan="' + (col.length + 1) + '">Scostamenti rispetto al CEDI attuale</td></tr>';
         return '<tr><td>' + rg[0] + '</td>' + col.map(function (c) { return '<td>' + rg[1](c) + '</td>'; }).join('') + '</tr>';
       }).join('') + '</tbody></table></div>';
+    if (R.attive.indexOf('OTTIMO') >= 0) h += '<p class="muted">Il punto di ottimo minimizza il costo totale di tutti i viaggi, non quello del singolo cliente: per un punto vendita lontano dall\'ottimo il costo può risultare più alto dell\'attuale.</p>';
     if (errori && errori.length) h += '<div class="alert err">' + errori.map(function (e) { return esc(S.sedi[e.sede].nome + ' → ' + e.pv + ': ' + e.motivo); }).join('<br>') + '</div>';
     $('confronto').innerHTML = h;
   }
@@ -757,7 +758,7 @@
     if (window.Worker && !CFG.SENZA_WORKER) {
       return await new Promise(function (ok, ko) {
         var w;
-        try { w = new Worker('js/lettore-worker.js?v=5'); } catch (e) { ko(e); return; }
+        try { w = new Worker('js/lettore-worker.js?v=6'); } catch (e) { ko(e); return; }
         w.onmessage = function (e) { w.terminate(); if (e.data.ok) ok(e.data.risultato); else ko(new Error(e.data.errore)); };
         w.onerror = function (e) { w.terminate(); ko(new Error('Lettura del file non riuscita' + (e && e.message ? ': ' + e.message : ''))); };
         w.postMessage({ buffer: buf, tipo: tipo || '' }, [buf]);
