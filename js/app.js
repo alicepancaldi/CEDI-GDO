@@ -364,7 +364,7 @@
   function percento(x) { return fmt(x * 100, 1).replace(/\./g, ''); }
   function mesiGasolioNecessari() {
     var m = {};
-    S.viaggi.forEach(function (v) { m[C.meseDi(v.data, -1)] = true; });
+    S.viaggi.forEach(function (v) { m[C.meseDi(v.data, 0)] = true; });
     Object.keys(S.gasolio).forEach(function (k) { m[k] = true; });
     return Object.keys(m).sort();
   }
@@ -428,7 +428,7 @@
     if (!conViaggi()) { box.hidden = true; box.innerHTML = ''; return; }
     R = R || ricalcoloViaggi(); var g = calcoloGasolio(R), G = g.parametri;
     var h = '<h2>Gasolio e CO₂</h2><p class="muted">Adeguamento gasolio: ' + percento(G.quota) + '% della tariffa, riferimento ' + fmt(G.rif, 3) + ' €/l, franchigia ' + percento(G.franchigia) +
-      '% (oltre la franchigia si applica tutta la variazione; prezzo del mese precedente). CO₂: consumo ' + fmt(G.consumoMotrice, 2) + ' l/km motrice, ' + fmt(G.consumoBilico, 2) + ' l/km bilico, ' + fmt(G.co2, 2) + ' kg/l. Valori annui = periodo × ' + fmt(R.periodo.fattoreAnno, 2) + '.</p>';
+      '% sottratta dalla variazione; prezzo medio dello stesso mese dei viaggi). CO₂: consumo ' + fmt(G.consumoMotrice, 2) + ' l/km motrice, ' + fmt(G.consumoBilico, 2) + ' l/km bilico, ' + fmt(G.co2, 2) + ' kg/l. Valori annui = periodo × ' + fmt(R.periodo.fattoreAnno, 2) + '.</p>';
     if (!S.gasolioOk) h += '<div class="alert warn">Tabella "gasolio" assente nel database: l\'adeguamento è calcolato a zero. Eseguire la parte "Versione 4" di supabase/schema.sql.</div>';
     else if (g.mesiMancanti.length) h += '<div class="alert warn">Prezzo del gasolio mancante per: ' + g.mesiMancanti.map(nomeMese).join(', ') + '. Per quei mesi l\'adeguamento è calcolato a zero: inserirlo in Configurazione.</div>';
     h += '<div class="scroll"><table><thead><tr><th>Sede</th><th>Litri / anno</th><th>CO₂ t / anno</th><th>Δ CO₂ t / anno vs attuale</th><th>Δ CO₂ %</th>' +
@@ -440,9 +440,9 @@
           '<td>' + eur(s.anno.adeguamento) + '</td><td>' + (d ? segno(d.adeguamento, 0, ' €') : '') + '</td>' +
           '<td>' + eur(s.anno.costoTotale) + '</td><td>' + (d ? segno(d.costoTotale, 0, ' €') : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>';
-    h += '<details><summary>Adeguamento mese per mese</summary><div class="scroll"><table><thead><tr><th>Mese dei viaggi</th><th>Prezzo del mese precedente</th><th>Variazione</th><th>Adeguamento sulla tariffa</th><th>Viaggi</th></tr></thead><tbody>' +
+    h += '<details><summary>Adeguamento mese per mese</summary><div class="scroll"><table><thead><tr><th>Mese dei viaggi</th><th>Prezzo medio del mese</th><th>Variazione</th><th>Adeguamento sulla tariffa</th><th>Viaggi</th></tr></thead><tbody>' +
       g.mesi.map(function (m) {
-        return '<tr><td>' + esc(nomeMese(m.mese)) + '</td><td>' + (m.prezzo == null ? '<span class="avviso">mancante (' + esc(nomeMese(m.mesePrezzo)) + ')</span>' : fmt(m.prezzo, 3) + ' €/l (' + esc(nomeMese(m.mesePrezzo)) + ')') + '</td>' +
+        return '<tr><td>' + esc(nomeMese(m.mese)) + '</td><td>' + (m.prezzo == null ? '<span class="avviso">mancante</span>' : fmt(m.prezzo, 3) + ' €/l') + '</td>' +
           '<td>' + (m.variazione == null ? '—' : segno(m.variazione * 100, 2, ' %')) + '</td><td>' + (m.mancante ? '—' : m.applicato ? segno(m.adeguamento * 100, 2, ' %') : '0 (entro la franchigia)') + '</td><td>' + fmt(m.viaggi, 0) + '</td></tr>';
       }).join('') + '</tbody></table></div></details>';
     box.innerHTML = h; box.hidden = false;

@@ -669,20 +669,21 @@
   }
 
   /**
-   * Adeguamento del mese: variazione del prezzo medio rispetto al riferimento; se in valore assoluto supera la franchigia
-   * si applica TUTTA la variazione alla quota di tariffa legata al gasolio (positivo = a favore del vettore).
+   * Adeguamento del mese (Allegato E, come applicato nei riconoscimenti ai vettori di maggio-agosto 2026):
+   * variazione v del prezzo medio del mese rispetto al riferimento; la franchigia si SOTTRAE e si applica solo l'eccedenza
+   * alla quota di tariffa legata al gasolio: a = quota × segno(v) × (|v| − franchigia), zero entro la franchigia.
    */
   function adeguamentoGasolio(prezzo, G) {
     if (!(prezzo > 0)) return null;
     var v = (prezzo - G.rif) / G.rif, applicato = Math.abs(v) > G.franchigia;
-    return { variazione: v, applicato: applicato, adeguamento: applicato ? G.quota * v : 0 };
+    return { variazione: v, applicato: applicato, adeguamento: applicato ? G.quota * (v > 0 ? 1 : -1) * (Math.abs(v) - G.franchigia) : 0 };
   }
 
   function classeMezzo(m) { return /BIL|BIGA|SEMIRIM|ARTIC|TRATT|AUTOTRENO/i.test(String(m || '')) ? 'bilico' : 'motrice'; }
 
   /**
    * Gasolio e CO2 per sede sui viaggi ricalcolati (R da ricalcolaViaggi).
-   * Adeguamento € = Σ costo del viaggio × adeguamento del mese (prezzo del mese precedente a quello del viaggio).
+   * Adeguamento € = Σ costo del viaggio × adeguamento del mese del viaggio (prezzo medio dello stesso mese, il "mese trascorso" a fine mese).
    * Litri = km percorsi (andata e ritorno fino al cliente più lontano) × consumo del mezzo; CO2 = litri × kg/l.
    */
   function gasolioViaggi(R, prezzi, G) {
@@ -691,7 +692,7 @@
     R.dettaglio.forEach(function (d) {
       var mv = meseDi(d.viaggio.data, 0);
       if (!mesi[mv]) {
-        var mp = meseDi(d.viaggio.data, -1), p = prezzi[mp], a = adeguamentoGasolio(p, G);
+        var mp = mv, p = prezzi[mp], a = adeguamentoGasolio(p, G);
         mesi[mv] = { mese: mv, mesePrezzo: mp, prezzo: a ? Number(p) : null, variazione: a ? a.variazione : null, applicato: a ? a.applicato : false,
           adeguamento: a ? a.adeguamento : 0, mancante: !a, viaggi: 0 };
       }

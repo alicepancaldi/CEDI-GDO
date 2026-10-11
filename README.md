@@ -70,8 +70,8 @@ Il punto di ottimo, con i viaggi importati, è il punto che minimizza la somma d
 
 Allegato E: il 30% della tariffa segue il prezzo medio mensile del gasolio (netto IVA e accise rimborsate, tabelle MIT/MASE) rispetto al riferimento di agosto 2023, 1,289 €/l.
 
-- Per i viaggi del mese *m* si usa il prezzo del mese *m − 1*.
-- Variazione v = (prezzo − 1,289) / 1,289. Se |v| supera la franchigia del 5% si applica **tutta** la variazione: adeguamento = 30% × v; altrimenti zero.
+- Per i viaggi del mese *m* si usa il prezzo medio del mese *m* (il "mese trascorso", calcolato a fine mese).
+- Variazione v = (prezzo − 1,289) / 1,289. Dalla variazione si **sottrae** la franchigia del 5%: adeguamento = 30% × segno(v) × (|v| − 5%), zero entro la franchigia. Regola verificata sui riconoscimenti ai vettori di maggio–agosto 2026 (scarto −0,6% sul totale).
 - Adeguamento di una sede = Σ costo del viaggio × adeguamento del suo mese; costo con adeguamento = costo base + adeguamento.
 - Litri = km percorsi (andata e ritorno fino al cliente più lontano) × consumo (motrice 0,28 l/km, bilico 0,33 l/km, modificabili); CO₂ = litri × 2,65 kg/l (modificabile).
 

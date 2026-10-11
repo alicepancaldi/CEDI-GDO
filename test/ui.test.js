@@ -481,33 +481,33 @@ test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione
   const r501 = Object.fromEntries([...d.querySelectorAll('#confronto tbody tr')].map(tr => [tr.cells[0].textContent, [...tr.cells].slice(1).map(c => c.textContent)]));
   assert.strictEqual(r501['Costo ripartito nel periodo'][0], Math.round(costo(kmV1) * 0.25).toLocaleString('it-IT') + ' €');
 
-  // gasolio: prezzo di luglio 2026 per i viaggi di agosto, oltre la franchigia (+10%)
+  // gasolio: prezzo di agosto 2026 per i viaggi di agosto, oltre la franchigia (+10%)
   p.tab('conf');
-  const inLuglio = d.querySelector('#gasolioMesi .gPrezzo[data-mese="2026-07"]');
-  assert.ok(inLuglio, 'campo prezzo di luglio 2026');
+  const inLuglio = d.querySelector('#gasolioMesi .gPrezzo[data-mese="2026-08"]');
+  assert.ok(inLuglio, 'campo prezzo di agosto 2026');
   assert.strictEqual(d.querySelectorAll('#gasolioMesi .gPrezzo').length, 1);
   inLuglio.value = '1,418';
   $('btnGasolio').click(); await p.attendiMsg(/Gasolio salvato: 1 prezzi mensili/);
-  assert.deepStrictEqual(S.db.gasolio, [{ mese: '2026-07', prezzo: 1.418 }]);
+  assert.deepStrictEqual(S.db.gasolio, [{ mese: '2026-08', prezzo: 1.418 }]);
   assert.strictEqual(S.db.parametri[0].gas_quota, 0.3);
   p.tab('riep');
   assert.ok(!$('gasolio').hidden);
   const rgas = d.querySelectorAll('#gasolio table')[0].tBodies[0].rows;
-  const adegAtteso = (costo(kmV1) + costo(kmV2)) * 0.3 * ((1.418 - 1.289) / 1.289) * 36.5;
+  const adegAtteso = (costo(kmV1) + costo(kmV2)) * 0.3 * ((1.418 - 1.289) / 1.289 - 0.05) * 36.5;
   assert.strictEqual(rgas[0].cells[5].textContent, Math.round(adegAtteso).toLocaleString('it-IT') + ' €');
   const litriAttesi = (kmV1 + kmV2) * 0.28 * 36.5;
   assert.strictEqual(rgas[0].cells[1].textContent, Math.round(litriAttesi).toLocaleString('it-IT'));
   assert.doesNotMatch($('gasolio').textContent, /mancante/);
   // tabella MIT da file: prezzo contrattuale = prezzo − IVA − (accisa − 403,22)
   p.tab('conf');
-  const csvG = 'Anno;Mese;Prezzo;IVA;Accisa;Netto\r\n2026;Luglio;2027,01;365,53;650;1011,49\r\n2026;Giugno;1953,53;352,28;612,9;988,35\r\n';
+  const csvG = 'Anno;Mese;Prezzo;IVA;Accisa;Netto\r\n2026;Agosto;2027,01;365,53;650;1011,49\r\n2026;Luglio;1953,53;352,28;612,9;988,35\r\n';
   Object.defineProperty($('fileGasolio'), 'files', { value: [new w.File([csvG], 'Gasolio_MIT.csv', { type: 'text/csv' })], configurable: true });
   $('fileGasolio').dispatchEvent(new w.Event('change'));
-  await p.attendiMsg(/Prezzi del gasolio caricati: 2 mesi \(giu 2026 – lug 2026\)/);
-  assert.strictEqual(S.db.gasolio.find(x => x.mese === '2026-07').prezzo, 1.4147);
+  await p.attendiMsg(/Prezzi del gasolio caricati: 2 mesi \(lug 2026 – ago 2026\)/);
+  assert.strictEqual(S.db.gasolio.find(x => x.mese === '2026-08').prezzo, 1.4147);
   assert.strictEqual(S.db.gasolio.length, 2);
   // prezzo entro la franchigia: adeguamento zero
-  p.tab('conf'); d.querySelector('#gasolioMesi .gPrezzo[data-mese="2026-07"]').value = '1,30';
+  p.tab('conf'); d.querySelector('#gasolioMesi .gPrezzo[data-mese="2026-08"]').value = '1,30';
   $('btnGasolio').click(); await p.attendiMsg(/Gasolio salvato/);
   p.tab('riep');
   assert.strictEqual(d.querySelectorAll('#gasolio table')[0].tBodies[0].rows[0].cells[5].textContent, '0 €');

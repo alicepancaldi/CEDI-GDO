@@ -316,15 +316,17 @@ test('gasolio: mese precedente anche a cavallo d\'anno', () => {
   assert.strictEqual(C.meseDi('2025-12-31', 1), '2026-01');
 });
 
-test('gasolio: oltre la franchigia si applica tutta la variazione, entro la franchigia zero', () => {
+test('gasolio: la franchigia si sottrae (si applica solo l\'eccedenza), entro la franchigia zero', () => {
   const G = C.parametriGasolio({ km_fatturati: 'AR' });
   vicino(G.rif, 1.289); vicino(G.quota, 0.3); vicino(G.franchigia, 0.05);
   const entro = C.adeguamentoGasolio(1.289 * 1.049, G);
   assert.strictEqual(entro.applicato, false); assert.strictEqual(entro.adeguamento, 0); vicino(entro.variazione, 0.049);
   const oltre = C.adeguamentoGasolio(1.289 * 1.08, G);
-  assert.strictEqual(oltre.applicato, true); vicino(oltre.adeguamento, 0.3 * 0.08);
+  assert.strictEqual(oltre.applicato, true); vicino(oltre.adeguamento, 0.3 * (0.08 - 0.05));
   const calo = C.adeguamentoGasolio(1.289 * 0.9, G);
-  vicino(calo.adeguamento, -0.03);
+  vicino(calo.adeguamento, -0.3 * 0.05);
+  // agosto 2026 riconosciuto ai vettori: 5,55% con prezzo 1,5919 €/l
+  vicino(C.adeguamentoGasolio(1.5919, G).adeguamento, 0.0555, 1e-3);
   assert.strictEqual(C.adeguamentoGasolio(null, G), null);
   assert.strictEqual(C.classeMezzo('BIL33'), 'bilico'); assert.strictEqual(C.classeMezzo('BIGA38'), 'bilico');
   assert.strictEqual(C.classeMezzo('SEMIRIMORCHIO'), 'bilico'); assert.strictEqual(C.classeMezzo('MOT23'), 'motrice'); assert.strictEqual(C.classeMezzo(''), 'motrice');
@@ -340,19 +342,19 @@ test('gasolio e CO2 sui viaggi ricalcolati', () => {
     ]
   };
   const G = Object.assign(C.parametriGasolio({ km_fatturati: 'AR' }), { consumoMotrice: 0.3, consumoBilico: 0.4, co2: 2.5 });
-  const prezzi = { '2026-07': 1.289 * 1.10, '2026-08': 1.289 * 1.03 }; // luglio oltre franchigia, agosto entro
+  const prezzi = { '2026-08': 1.289 * 1.10, '2026-09': 1.289 * 1.03 }; // agosto oltre franchigia, settembre entro
   const g = C.gasolioViaggi(R, prezzi, G);
   const a = g.sedi[0], o = g.sedi[1];
-  vicino(a.adeguamento, 260 * 0.03);                 // solo il viaggio di agosto (prezzo di luglio)
+  vicino(a.adeguamento, 260 * 0.3 * 0.05);           // solo il viaggio di agosto, eccedenza 10% − 5%
   vicino(a.litri, 200 * 0.3 + 100 * 0.4 + 50 * 0.3);
   vicino(a.co2, a.litri * 2.5 / 1000);
-  vicino(a.anno.costoTotale, (260 + 130 + 65 + 260 * 0.03) * 10);
+  vicino(a.anno.costoTotale, (260 + 130 + 65 + 260 * 0.015) * 10);
   vicino(o.litri, 180 * 0.3 + 120 * 0.4);
   vicino(o.delta.co2, (o.litri - a.litri) * 2.5 / 1000 * 10);
-  assert.deepStrictEqual(g.mesi.map(m => [m.mese, m.mesePrezzo, m.applicato]), [['2026-08', '2026-07', true], ['2026-09', '2026-08', false]]);
+  assert.deepStrictEqual(g.mesi.map(m => [m.mese, m.mesePrezzo, m.applicato]), [['2026-08', '2026-08', true], ['2026-09', '2026-09', false]]);
   assert.deepStrictEqual(g.mesiMancanti, []);
-  const g2 = C.gasolioViaggi(R, { '2026-07': 1.5 }, G);
-  assert.deepStrictEqual(g2.mesiMancanti, ['2026-08']);
+  const g2 = C.gasolioViaggi(R, { '2026-08': 1.5 }, G);
+  assert.deepStrictEqual(g2.mesiMancanti, ['2026-09']);
   // sola andata fatturata: i km percorsi restano andata e ritorno
   const g3 = C.gasolioViaggi(R, prezzi, Object.assign({}, G, { fatt: 1 }));
   vicino(g3.sedi[0].litri, 2 * a.litri);
