@@ -407,6 +407,21 @@
       disegnaTutto(); msg('Gasolio salvato: ' + nuovi.length + ' prezzi mensili.', 'ok');
     }).catch(function () {});
   });
+  $('fileGasolio').addEventListener('change', function () {
+    var f = this.files && this.files[0], input = this; if (!f) return;
+    esegui(async function () {
+      if (!S.gasolioOk) throw new Error('Tabella "gasolio" assente: eseguire la parte "Versione 4" di supabase/schema.sql.');
+      var b = await f.arrayBuffer();
+      var righe = /\.(csv|txt)$/i.test(f.name) ? C.leggiCSV(new TextDecoder('utf-8').decode(b)) : C.righeDaExcel(window.XLSX, new Uint8Array(b));
+      var prezzi = C.preparaPrezziGasolio(righe);
+      var strani = prezzi.filter(function (p) { return !(p.prezzo > 0.3 && p.prezzo < 5); });
+      if (strani.length) throw new Error('Prezzi non plausibili per: ' + strani.map(function (p) { return p.mese + ' (' + p.prezzo + ' €/l)'; }).join(', '));
+      await upsert('gasolio', prezzi, 'mese');
+      prezzi.forEach(function (p) { S.gasolio[p.mese] = p.prezzo; });
+      disegnaTutto();
+      msg('Prezzi del gasolio caricati: ' + prezzi.length + ' mesi (' + nomeMese(prezzi[0].mese) + ' – ' + nomeMese(prezzi[prezzi.length - 1].mese) + ').', 'ok');
+    }, 'Lettura della tabella del gasolio…').catch(function () {}).then(function () { input.value = ''; });
+  });
   function calcoloGasolio(R) { return C.gasolioViaggi(R || ricalcoloViaggi(), S.gasolio, C.parametriGasolio(S.P)); }
   function disegnaGasolio(R) {
     var box = $('gasolio');

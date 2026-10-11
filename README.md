@@ -75,7 +75,7 @@ Allegato E: il 30% della tariffa segue il prezzo medio mensile del gasolio (nett
 - Adeguamento di una sede = Σ costo del viaggio × adeguamento del suo mese; costo con adeguamento = costo base + adeguamento.
 - Litri = km percorsi (andata e ritorno fino al cliente più lontano) × consumo (motrice 0,28 l/km, bilico 0,33 l/km, modificabili); CO₂ = litri × 2,65 kg/l (modificabile).
 
-In Configurazione → "Adeguamento gasolio e CO₂" si inseriscono i parametri e un prezzo per ogni mese che serve ai viaggi importati. Richiede la parte "Versione 4" di `supabase/schema.sql`.
+In Configurazione → "Adeguamento gasolio e CO₂" si inseriscono i parametri e un prezzo per ogni mese che serve ai viaggi importati. In alternativa si carica la tabella MIT (Anno, Mese, Prezzo, IVA, Accisa in €/1000 l): il prezzo usato è prezzo − IVA − rimborso accise all'autotrasporto (accisa − 403,22 €/1000 l), coerente con il riferimento di 1,289 €/l. Richiede la parte "Versione 4" di `supabase/schema.sql`.
 
 ## Volumi senza viaggi reali: due modi
 - **Carichi giornalieri** (consigliato), cioè i colli per cliente, giorno e reparto, dal file di logistica. Il carico di un giorno è la somma dei reparti, convertiti in pallet con i fattori "colli per pallet" di ogni reparto (Configurazione). I viaggi si calcolano **giorno per giorno**: carico del giorno ÷ capacità del mezzo, arrotondato per eccesso. Poi si riportano a settimana: viaggi del periodo ÷ (giorni con dati ÷ giorni lavorativi a settimana).

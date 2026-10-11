@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Simulatore CEDI</title>
-<link rel="stylesheet" href="css/app.css?v=9">
+<link rel="stylesheet" href="css/app.css?v=10">
 </head>
 <body>
 <header>
@@ -118,6 +118,8 @@
         <label>Consumo bilico l/km<input id="gConsBil" inputmode="decimal"></label>
         <label>CO₂ kg per litro di gasolio<input id="gCo2" inputmode="decimal"></label>
       </div>
+      <div class="grid"><label class="wide">Tabella prezzi MIT (Excel o CSV: Anno, Mese, Prezzo, IVA, Accisa in €/1000 l)<input type="file" id="fileGasolio" accept=".xlsx,.xls,.csv,.txt"></label></div>
+      <p class="muted">Prezzo usato = prezzo − IVA − rimborso accise all'autotrasporto (accisa − 403,22 €/1000 l), come il riferimento di 1,289 €/l. I prezzi caricati sostituiscono quelli degli stessi mesi.</p>
       <div id="gasolioMesi"></div>
       <button class="btn" id="btnGasolio">Salva gasolio</button>
     </div>
@@ -141,8 +143,8 @@
 <script src="js/vendor/supabase-2.117.3.js"></script>
 <script src="js/vendor/exceljs-4.4.0.min.js"></script>
 <script src="js/vendor/xlsx-0.18.5.full.min.js"></script>
-<script src="js/config.js?v=9"></script>
-<script src="js/calcolo.js?v=9"></script>
-<script src="js/app.js?v=9"></script>
+<script src="js/config.js?v=10"></script>
+<script src="js/calcolo.js?v=10"></script>
+<script src="js/app.js?v=10"></script>
 </body>
 </html>

@@ -720,6 +720,39 @@
     return { sedi: sedi, mesi: lista, mesiMancanti: lista.filter(function (m) { return m.mancante; }).map(function (m) { return m.mesePrezzo; }), parametri: G };
   }
 
+  // Autotrasporto: il rimborso delle accise è la differenza tra l'aliquota vigente e 403,22 €/1000 l (aliquota agevolata).
+  var ACCISA_AGEVOLATA = 403.22;
+  var MESI_IT = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+
+  /** Prezzo contrattuale €/l = prezzo − IVA − rimborso accise (accisa − 403,22), con valori della tabella in €/1000 l o €/l. */
+  function prezzoContrattuale(prezzo, iva, accisa) {
+    var k = prezzo > 50 ? 1 : 1000; // tabella MIT in €/1000 litri
+    var p = prezzo * k, i = (iva || 0) * k, a = (accisa || 0) * k;
+    return (p - i - Math.max(a - ACCISA_AGEVOLATA, 0)) / 1000;
+  }
+
+  /** Tabella dei prezzi mensili (MIT/MASE): colonne Anno, Mese, Prezzo, IVA, Accisa; in alternativa una colonna di prezzo già netto (€/l). */
+  function preparaPrezziGasolio(righe) {
+    var iHdr = righe.findIndex(function (r) { var n = (r || []).map(normTitolo); return n.indexOf('anno') >= 0 && n.indexOf('mese') >= 0; });
+    if (iHdr < 0) throw new Error('Tabella del gasolio non riconosciuta: servono le colonne "Anno" e "Mese".');
+    var n = righe[iHdr].map(normTitolo), c = function (al) { for (var i = 0; i < al.length; i++) { var k = n.indexOf(al[i]); if (k >= 0) return k; } return -1; };
+    var col = { anno: n.indexOf('anno'), mese: n.indexOf('mese'), prezzo: c(['prezzo', 'prezzo medio', 'prezzo al consumo']), iva: c(['iva']), accisa: c(['accisa', 'accise']),
+      contratto: c(['prezzo contratto', 'prezzo netto contratto', 'netto contratto']) };
+    if (col.contratto < 0 && (col.prezzo < 0 || col.iva < 0 || col.accisa < 0)) throw new Error('Servono le colonne Prezzo, IVA e Accisa (oppure "Prezzo contratto" già netto in €/l).');
+    var out = [];
+    righe.slice(iHdr + 1).forEach(function (r) {
+      if (!r || r.every(function (x) { return String(x == null ? '' : x).trim() === ''; })) return;
+      var anno = Math.round(num(r[col.anno], 'anno')), m = String(r[col.mese] == null ? '' : r[col.mese]).trim().toLowerCase();
+      var mese = /^\d+$/.test(m) ? Number(m) : MESI_IT.indexOf(m) + 1;
+      if (!(anno >= 2000 && anno <= 2100) || !(mese >= 1 && mese <= 12)) throw new Error('Riga non valida: ' + r.join(' | '));
+      var prezzo = col.contratto >= 0 ? num(r[col.contratto], 'prezzo contratto') : prezzoContrattuale(num(r[col.prezzo], 'prezzo'), num(r[col.iva], 'IVA'), num(r[col.accisa], 'accisa'));
+      if (prezzo > 50) prezzo = prezzo / 1000;
+      out.push({ mese: anno + '-' + String(mese).padStart(2, '0'), prezzo: Math.round(prezzo * 100000) / 100000 });
+    });
+    if (!out.length) throw new Error('Nessun prezzo trovato nella tabella.');
+    return out.sort(function (a, b) { return a.mese < b.mese ? -1 : 1; });
+  }
+
   /** Fogli di estrazione per gasolio e CO2. */
   function estrazioneGasolio(sedi, g) {
     var intest = ['Sede', 'Km percorsi nel periodo', 'Litri nel periodo', 'CO₂ t nel periodo', 'Adeguamento gasolio € nel periodo',
@@ -840,6 +873,6 @@
     ottimoViaggi: ottimoViaggi, preparaTariffe: preparaTariffe, righeDaExcel: righeDaExcel, tortuosita: tortuosita, estrazioneViaggi: estrazioneViaggi, periodoViaggi: periodoViaggi, REPARTI_CODICE: REPARTI_CODICE, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto,
     GASOLIO_DEF: GASOLIO_DEF, parametriGasolio: parametriGasolio, meseDi: meseDi, adeguamentoGasolio: adeguamentoGasolio, classeMezzo: classeMezzo,
     gasolioViaggi: gasolioViaggi, estrazioneGasolio: estrazioneGasolio,
-    PROVINCE_FUORI_PERIMETRO: PROVINCE_FUORI_PERIMETRO, fuoriPerimetro: fuoriPerimetro, pvFuoriPerimetro: pvFuoriPerimetro, capDaIndirizzo: capDaIndirizzo
+    PROVINCE_FUORI_PERIMETRO: PROVINCE_FUORI_PERIMETRO, fuoriPerimetro: fuoriPerimetro, pvFuoriPerimetro: pvFuoriPerimetro, capDaIndirizzo: capDaIndirizzo, ACCISA_AGEVOLATA: ACCISA_AGEVOLATA, prezzoContrattuale: prezzoContrattuale, preparaPrezziGasolio: preparaPrezziGasolio
   };
 });

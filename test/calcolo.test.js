@@ -390,3 +390,18 @@ test('perimetro: i PV in Campania restano fuori da import e calcoli', () => {
   assert.ok(g.carichi.every(c => c.pv === '1'));
   assert.deepStrictEqual(g.fuoriPerimetro.clienti, ['2']);
 });
+
+test('gasolio: tabella MIT in €/1000 l → prezzo contrattuale (netto IVA e rimborso accise)', () => {
+  vicino(C.prezzoContrattuale(1953.53, 352.28, 612.9), (1953.53 - 352.28 - (612.9 - 403.22)) / 1000);
+  vicino(C.prezzoContrattuale(1.95353, 0.35228, 0.6129), (1953.53 - 352.28 - (612.9 - 403.22)) / 1000);
+  vicino(C.prezzoContrattuale(1500, 270, 400), (1500 - 270) / 1000); // accisa sotto l'aliquota agevolata: nessun rimborso
+  const righe = [['Tabella dati'], ['Anno', 'Mese', 'Prezzo', 'IVA', 'Accisa', 'Netto'],
+    [2026, 'Giugno', 1953.53, 352.28, 612.9, 988.35], [2026, 'Luglio', 2027.01, 365.53, 650, 1011.49], [2025, 'Dicembre', 1652.6, 298.01, 632.4, 722.19]];
+  const p = C.preparaPrezziGasolio(righe);
+  assert.deepStrictEqual(p.map(x => x.mese), ['2025-12', '2026-06', '2026-07']);
+  vicino(p[1].prezzo, 1.39157, 1e-5);
+  vicino(p[2].prezzo, 1.41470, 1e-5);
+  const q = C.preparaPrezziGasolio([['anno', 'mese', 'prezzo contratto'], ['2026', '6', '1,40']]);
+  assert.deepStrictEqual(q, [{ mese: '2026-06', prezzo: 1.4 }]);
+  assert.throws(() => C.preparaPrezziGasolio([['x', 'y']]), /Anno/);
+});
