@@ -308,3 +308,54 @@ test('comune dall\'etichetta ORS', () => {
   assert.strictEqual(C.comuneDaEtichetta('Santo Spirito, Firenze, FI, Italia'), 'Firenze');
   assert.strictEqual(C.comuneDaEtichetta('qualcosa'), null);
 });
+
+test('gasolio: mese precedente anche a cavallo d\'anno', () => {
+  assert.strictEqual(C.meseDi('2026-08-15', 0), '2026-08');
+  assert.strictEqual(C.meseDi('2026-08-15', -1), '2026-07');
+  assert.strictEqual(C.meseDi('2026-01-03', -1), '2025-12');
+  assert.strictEqual(C.meseDi('2025-12-31', 1), '2026-01');
+});
+
+test('gasolio: oltre la franchigia si applica tutta la variazione, entro la franchigia zero', () => {
+  const G = C.parametriGasolio({ km_fatturati: 'AR' });
+  vicino(G.rif, 1.289); vicino(G.quota, 0.3); vicino(G.franchigia, 0.05);
+  const entro = C.adeguamentoGasolio(1.289 * 1.049, G);
+  assert.strictEqual(entro.applicato, false); assert.strictEqual(entro.adeguamento, 0); vicino(entro.variazione, 0.049);
+  const oltre = C.adeguamentoGasolio(1.289 * 1.08, G);
+  assert.strictEqual(oltre.applicato, true); vicino(oltre.adeguamento, 0.3 * 0.08);
+  const calo = C.adeguamentoGasolio(1.289 * 0.9, G);
+  vicino(calo.adeguamento, -0.03);
+  assert.strictEqual(C.adeguamentoGasolio(null, G), null);
+  assert.strictEqual(C.classeMezzo('BIL33'), 'bilico'); assert.strictEqual(C.classeMezzo('BIGA38'), 'bilico');
+  assert.strictEqual(C.classeMezzo('SEMIRIMORCHIO'), 'bilico'); assert.strictEqual(C.classeMezzo('MOT23'), 'motrice'); assert.strictEqual(C.classeMezzo(''), 'motrice');
+});
+
+test('gasolio e CO2 sui viaggi ricalcolati', () => {
+  const R = {
+    attive: ['ATTUALE', 'OPZ1'], periodo: { fattoreAnno: 10 },
+    dettaglio: [
+      { viaggio: { data: '2026-08-03', mezzo: 'MOT23' }, sedi: { ATTUALE: { km: 200, costo: 260 }, OPZ1: { km: 180, costo: 234 } } },
+      { viaggio: { data: '2026-09-10', mezzo: 'BIL33' }, sedi: { ATTUALE: { km: 100, costo: 130 }, OPZ1: { km: 120, costo: 156 } } },
+      { viaggio: { data: '2026-09-11', mezzo: 'MOT12' }, sedi: { ATTUALE: { km: 50, costo: 65 }, OPZ1: null } }
+    ]
+  };
+  const G = Object.assign(C.parametriGasolio({ km_fatturati: 'AR' }), { consumoMotrice: 0.3, consumoBilico: 0.4, co2: 2.5 });
+  const prezzi = { '2026-07': 1.289 * 1.10, '2026-08': 1.289 * 1.03 }; // luglio oltre franchigia, agosto entro
+  const g = C.gasolioViaggi(R, prezzi, G);
+  const a = g.sedi[0], o = g.sedi[1];
+  vicino(a.adeguamento, 260 * 0.03);                 // solo il viaggio di agosto (prezzo di luglio)
+  vicino(a.litri, 200 * 0.3 + 100 * 0.4 + 50 * 0.3);
+  vicino(a.co2, a.litri * 2.5 / 1000);
+  vicino(a.anno.costoTotale, (260 + 130 + 65 + 260 * 0.03) * 10);
+  vicino(o.litri, 180 * 0.3 + 120 * 0.4);
+  vicino(o.delta.co2, (o.litri - a.litri) * 2.5 / 1000 * 10);
+  assert.deepStrictEqual(g.mesi.map(m => [m.mese, m.mesePrezzo, m.applicato]), [['2026-08', '2026-07', true], ['2026-09', '2026-08', false]]);
+  assert.deepStrictEqual(g.mesiMancanti, []);
+  const g2 = C.gasolioViaggi(R, { '2026-07': 1.5 }, G);
+  assert.deepStrictEqual(g2.mesiMancanti, ['2026-08']);
+  // sola andata fatturata: i km percorsi restano andata e ritorno
+  const g3 = C.gasolioViaggi(R, prezzi, Object.assign({}, G, { fatt: 1 }));
+  vicino(g3.sedi[0].litri, 2 * a.litri);
+  const e = C.estrazioneGasolio({ ATTUALE: { nome: 'Interporto' }, OPZ1: { nome: 'Cellamare' } }, g);
+  assert.strictEqual(e.righe.length, 2); assert.strictEqual(e.righe[0].length, e.intestazione.length); assert.strictEqual(e.mesi.length, 2);
+});

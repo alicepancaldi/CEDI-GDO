@@ -628,6 +628,93 @@
     return { intestazioneRiepilogo: intestRiep, riepilogo: righeRiep, intestazione: intest, righe: righe, intestazioneViaggi: intestV, viaggi: righeV };
   }
 
+  /* ============================ Adeguamento gasolio (Allegato E) e CO2 ============================ */
+  var GASOLIO_DEF = { rif: 1.289, quota: 0.30, franchigia: 0.05, consumoMotrice: 0.28, consumoBilico: 0.33, co2: 2.65 };
+
+  /** Parametri del gasolio dai parametri generali (quote e franchigia in frazione: 0,30 = 30%). */
+  function parametriGasolio(P) {
+    var v = function (x, d) { return x != null && isFinite(x) ? Number(x) : d; };
+    return { rif: v(P.gas_rif, GASOLIO_DEF.rif), quota: v(P.gas_quota, GASOLIO_DEF.quota), franchigia: v(P.gas_franchigia, GASOLIO_DEF.franchigia),
+      consumoMotrice: v(P.consumo_motrice, GASOLIO_DEF.consumoMotrice), consumoBilico: v(P.consumo_bilico, GASOLIO_DEF.consumoBilico),
+      co2: v(P.co2_kg_l, GASOLIO_DEF.co2), fatt: P.km_fatturati === 'AR' ? 2 : 1 };
+  }
+
+  /** 'AAAA-MM' del mese della data, spostato di `scarto` mesi (-1 = mese precedente). */
+  function meseDi(dataISO, scarto) {
+    var a = Number(String(dataISO).slice(0, 4)), m = Number(String(dataISO).slice(5, 7)) - 1 + (scarto || 0);
+    a += Math.floor(m / 12); m = ((m % 12) + 12) % 12;
+    return a + '-' + String(m + 1).padStart(2, '0');
+  }
+
+  /**
+   * Adeguamento del mese: variazione del prezzo medio rispetto al riferimento; se in valore assoluto supera la franchigia
+   * si applica TUTTA la variazione alla quota di tariffa legata al gasolio (positivo = a favore del vettore).
+   */
+  function adeguamentoGasolio(prezzo, G) {
+    if (!(prezzo > 0)) return null;
+    var v = (prezzo - G.rif) / G.rif, applicato = Math.abs(v) > G.franchigia;
+    return { variazione: v, applicato: applicato, adeguamento: applicato ? G.quota * v : 0 };
+  }
+
+  function classeMezzo(m) { return /BIL|BIGA|SEMIRIM|ARTIC|TRATT|AUTOTRENO/i.test(String(m || '')) ? 'bilico' : 'motrice'; }
+
+  /**
+   * Gasolio e CO2 per sede sui viaggi ricalcolati (R da ricalcolaViaggi).
+   * Adeguamento € = Σ costo del viaggio × adeguamento del mese (prezzo del mese precedente a quello del viaggio).
+   * Litri = km percorsi (andata e ritorno fino al cliente più lontano) × consumo del mezzo; CO2 = litri × kg/l.
+   */
+  function gasolioViaggi(R, prezzi, G) {
+    var mesi = {}, tot = {};
+    R.attive.forEach(function (c) { tot[c] = { viaggi: 0, costoBase: 0, adeguamento: 0, kmPercorsi: 0, litri: 0 }; });
+    R.dettaglio.forEach(function (d) {
+      var mv = meseDi(d.viaggio.data, 0);
+      if (!mesi[mv]) {
+        var mp = meseDi(d.viaggio.data, -1), p = prezzi[mp], a = adeguamentoGasolio(p, G);
+        mesi[mv] = { mese: mv, mesePrezzo: mp, prezzo: a ? Number(p) : null, variazione: a ? a.variazione : null, applicato: a ? a.applicato : false,
+          adeguamento: a ? a.adeguamento : 0, mancante: !a, viaggi: 0 };
+      }
+      var M = mesi[mv];
+      M.viaggi++;
+      var cons = classeMezzo(d.viaggio.mezzo) === 'bilico' ? G.consumoBilico : G.consumoMotrice;
+      R.attive.forEach(function (c) {
+        var x = d.sedi[c]; if (!x) return;
+        var t = tot[c], km = x.km * (G.fatt === 2 ? 1 : 2);
+        t.viaggi++; t.costoBase += x.costo; t.adeguamento += x.costo * M.adeguamento; t.kmPercorsi += km; t.litri += km * cons;
+      });
+    });
+    var f = R.periodo ? R.periodo.fattoreAnno : 0, rif = tot.ATTUALE;
+    var annuo = function (t) {
+      return { litri: t.litri * f, co2: t.litri * G.co2 / 1000 * f, adeguamento: t.adeguamento * f, costoBase: t.costoBase * f, costoTotale: (t.costoBase + t.adeguamento) * f };
+    };
+    var aRif = rif ? annuo(rif) : null;
+    var sedi = R.attive.map(function (c) {
+      var t = tot[c], a = annuo(t), conf = aRif && c !== 'ATTUALE';
+      return { codice: c, viaggi: t.viaggi, kmPercorsi: t.kmPercorsi, litri: t.litri, co2: t.litri * G.co2 / 1000, adeguamento: t.adeguamento, costoBase: t.costoBase,
+        anno: a,
+        delta: conf ? { litri: a.litri - aRif.litri, co2: a.co2 - aRif.co2, co2Pct: aRif.co2 ? (a.co2 - aRif.co2) / aRif.co2 * 100 : null,
+          adeguamento: a.adeguamento - aRif.adeguamento, costoTotale: a.costoTotale - aRif.costoTotale } : null };
+    });
+    var lista = Object.keys(mesi).sort().map(function (k) { return mesi[k]; });
+    return { sedi: sedi, mesi: lista, mesiMancanti: lista.filter(function (m) { return m.mancante; }).map(function (m) { return m.mesePrezzo; }), parametri: G };
+  }
+
+  /** Fogli di estrazione per gasolio e CO2. */
+  function estrazioneGasolio(sedi, g) {
+    var intest = ['Sede', 'Km percorsi nel periodo', 'Litri nel periodo', 'CO₂ t nel periodo', 'Adeguamento gasolio € nel periodo',
+      'Litri/anno', 'CO₂ t/anno', 'Δ CO₂ t/anno vs attuale', 'Δ CO₂ %', 'Adeguamento €/anno', 'Δ adeguamento €/anno', 'Costo con adeguamento €/anno', 'Δ costo con adeguamento €/anno'];
+    var righe = g.sedi.map(function (s) {
+      var d = s.delta;
+      return [sedi[s.codice].nome, arr(s.kmPercorsi, 0), arr(s.litri, 0), arr(s.co2, 1), arr(s.adeguamento, 0), arr(s.anno.litri, 0), arr(s.anno.co2, 1),
+        d ? arr(d.co2, 1) : '', d && d.co2Pct != null ? arr(d.co2Pct, 1) : '', arr(s.anno.adeguamento, 0), d ? arr(d.adeguamento, 0) : '', arr(s.anno.costoTotale, 0), d ? arr(d.costoTotale, 0) : ''];
+    });
+    var intestM = ['Mese dei viaggi', 'Mese del prezzo', 'Prezzo €/l', 'Variazione %', 'Oltre la franchigia', 'Adeguamento % sulla tariffa', 'Viaggi'];
+    var righeM = g.mesi.map(function (m) {
+      return [m.mese, m.mesePrezzo, m.prezzo == null ? 'mancante' : m.prezzo, m.variazione == null ? '' : arr(m.variazione * 100, 2), m.mancante ? '' : (m.applicato ? 'sì' : 'no'),
+        arr(m.adeguamento * 100, 2), m.viaggi];
+    });
+    return { intestazione: intest, righe: righe, intestazioneMesi: intestM, mesi: righeM };
+  }
+
   /** Tariffario da tabella: colonne anno, mezzo (facoltativa), km da, km a, €/km, € fisso. */
   function preparaTariffe(righe) {
     var iHdr = righe.findIndex(function (r) { return r && r.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }); });
@@ -728,6 +815,8 @@
     tabella: tabella, riepilogo: riepilogo, estrazione: estrazione, csv: csv, mappaColonne: mappaColonne,
     preparaImport: preparaImport, leggiCSV: leggiCSV, aBlocchi: aBlocchi, arr: arr,
     volumePV: volumePV, volumi: volumi, costoViaggio: costoViaggio, normTesto: normTesto, comuneDaEtichetta: comuneDaEtichetta, ricalcolaViaggi: ricalcolaViaggi, riepilogoViaggi: riepilogoViaggi,
-    ottimoViaggi: ottimoViaggi, preparaTariffe: preparaTariffe, righeDaExcel: righeDaExcel, tortuosita: tortuosita, estrazioneViaggi: estrazioneViaggi, periodoViaggi: periodoViaggi, REPARTI_CODICE: REPARTI_CODICE, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
+    ottimoViaggi: ottimoViaggi, preparaTariffe: preparaTariffe, righeDaExcel: righeDaExcel, tortuosita: tortuosita, estrazioneViaggi: estrazioneViaggi, periodoViaggi: periodoViaggi, REPARTI_CODICE: REPARTI_CODICE, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto,
+    GASOLIO_DEF: GASOLIO_DEF, parametriGasolio: parametriGasolio, meseDi: meseDi, adeguamentoGasolio: adeguamentoGasolio, classeMezzo: classeMezzo,
+    gasolioViaggi: gasolioViaggi, estrazioneGasolio: estrazioneGasolio
   };
 });

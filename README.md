@@ -66,6 +66,17 @@ Dal file del gestionale vengono acquisiti solo viaggio, data, giro, vettore (rag
 
 Il punto di ottimo, con i viaggi importati, è il punto che minimizza la somma dei costi dei viaggi reali (distanze in linea d'aria × fattore di tortuosità stimato dalle distanze stradali già calcolate, ricerca a griglia con raffinamento); poi viene valorizzato con le distanze stradali come le altre sedi.
 
+## Adeguamento gasolio e CO₂
+
+Allegato E: il 30% della tariffa segue il prezzo medio mensile del gasolio (netto IVA e accise rimborsate, tabelle MIT/MASE) rispetto al riferimento di agosto 2023, 1,289 €/l.
+
+- Per i viaggi del mese *m* si usa il prezzo del mese *m − 1*.
+- Variazione v = (prezzo − 1,289) / 1,289. Se |v| supera la franchigia del 5% si applica **tutta** la variazione: adeguamento = 30% × v; altrimenti zero.
+- Adeguamento di una sede = Σ costo del viaggio × adeguamento del suo mese; costo con adeguamento = costo base + adeguamento.
+- Litri = km percorsi (andata e ritorno fino al cliente più lontano) × consumo (motrice 0,28 l/km, bilico 0,33 l/km, modificabili); CO₂ = litri × 2,65 kg/l (modificabile).
+
+In Configurazione → "Adeguamento gasolio e CO₂" si inseriscono i parametri e un prezzo per ogni mese che serve ai viaggi importati. Richiede la parte "Versione 4" di `supabase/schema.sql`.
+
 ## Volumi senza viaggi reali: due modi
 - **Carichi giornalieri** (consigliato), cioè i colli per cliente, giorno e reparto, dal file di logistica. Il carico di un giorno è la somma dei reparti, convertiti in pallet con i fattori "colli per pallet" di ogni reparto (Configurazione). I viaggi si calcolano **giorno per giorno**: carico del giorno ÷ capacità del mezzo, arrotondato per eccesso. Poi si riportano a settimana: viaggi del periodo ÷ (giorni con dati ÷ giorni lavorativi a settimana).
 - **Pallet e consegne a settimana** inseriti a mano, per i PV senza carichi giornalieri.

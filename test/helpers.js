@@ -103,10 +103,10 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
   const db = {
     parametri: [{ id: 1, euro_km: 1.3, km_fatturati: 'AR', capacita_pallet: 33, costo_fisso_viaggio: 0, settimane_anno: 52, giorni_settimana: 6 }],
     sedi: sedi.map(c => ({ codice: c, nome: nomi[c], indirizzo: '', lat: null, lng: null, capacita_mezzo: null, geocodifica: '' })),
-    punti_vendita: [], distanze: [], carichi: [], reparti: [], viaggi: [], viaggi_clienti: [], tariffe: []
+    punti_vendita: [], distanze: [], carichi: [], reparti: [], viaggi: [], viaggi_clienti: [], tariffe: [], gasolio: []
   };
   const pk = { parametri: ['id'], sedi: ['codice'], punti_vendita: ['codice'], distanze: ['sede', 'pv'], carichi: ['pv', 'data', 'reparto'], reparti: ['reparto'],
-    viaggi: ['id'], viaggi_clienti: ['viaggio', 'pv'], tariffe: ['id'] };
+    viaggi: ['id'], viaggi_clienti: ['viaggio', 'pv'], tariffe: ['id'], gasolio: ['mese'] };
   let prossimoId = 1;
   const revocati = { sedi: ['insert', 'delete'], parametri: ['insert', 'delete'] };
   const stats = { select: 0, upsert: 0, update: 0, delete: 0, invoke: 0, maxRange: 0 };
@@ -146,6 +146,8 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
       if (r.km_a != null && !(r.km_a > r.km_da)) e('violates check constraint tariffe_check');
       if (!(r.euro_km >= 0) || !(r.euro_fisso >= 0)) e('violates check constraint tariffe_euro');
     }
+    if (t === 'gasolio' && (!/^\d{4}-(0[1-9]|1[0-2])$/.test(r.mese) || !(r.prezzo > 0))) e('violates check constraint gasolio');
+    if (t === 'parametri' && r.gas_quota != null && !(r.gas_quota >= 0 && r.gas_quota <= 1)) e('gas_quota check');
     if (t === 'reparti' && r.colli_per_pallet != null && !(r.colli_per_pallet > 0)) e('violates check constraint reparti');
     if (t === 'parametri' && r.giorni_settimana != null && !(r.giorni_settimana >= 1 && r.giorni_settimana <= 7)) e('giorni_settimana check');
     if (t === 'sedi' && r.capacita_mezzo !== null && r.capacita_mezzo !== undefined && !(r.capacita_mezzo > 0)) e('capacita check');

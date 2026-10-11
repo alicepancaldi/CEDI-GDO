@@ -481,11 +481,35 @@ test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione
   const r501 = Object.fromEntries([...d.querySelectorAll('#confronto tbody tr')].map(tr => [tr.cells[0].textContent, [...tr.cells].slice(1).map(c => c.textContent)]));
   assert.strictEqual(r501['Costo ripartito nel periodo'][0], Math.round(costo(kmV1) * 0.25).toLocaleString('it-IT') + ' €');
 
+  // gasolio: prezzo di luglio 2026 per i viaggi di agosto, oltre la franchigia (+10%)
+  p.tab('conf');
+  const inLuglio = d.querySelector('#gasolioMesi .gPrezzo[data-mese="2026-07"]');
+  assert.ok(inLuglio, 'campo prezzo di luglio 2026');
+  assert.strictEqual(d.querySelectorAll('#gasolioMesi .gPrezzo').length, 1);
+  inLuglio.value = '1,418';
+  $('btnGasolio').click(); await p.attendiMsg(/Gasolio salvato: 1 prezzi mensili/);
+  assert.deepStrictEqual(S.db.gasolio, [{ mese: '2026-07', prezzo: 1.418 }]);
+  assert.strictEqual(S.db.parametri[0].gas_quota, 0.3);
+  p.tab('riep');
+  assert.ok(!$('gasolio').hidden);
+  const rgas = d.querySelectorAll('#gasolio table')[0].tBodies[0].rows;
+  const adegAtteso = (costo(kmV1) + costo(kmV2)) * 0.3 * ((1.418 - 1.289) / 1.289) * 36.5;
+  assert.strictEqual(rgas[0].cells[5].textContent, Math.round(adegAtteso).toLocaleString('it-IT') + ' €');
+  const litriAttesi = (kmV1 + kmV2) * 0.28 * 36.5;
+  assert.strictEqual(rgas[0].cells[1].textContent, Math.round(litriAttesi).toLocaleString('it-IT'));
+  assert.doesNotMatch($('gasolio').textContent, /mancante/);
+  // prezzo entro la franchigia: adeguamento zero
+  p.tab('conf'); d.querySelector('#gasolioMesi .gPrezzo').value = '1,30';
+  $('btnGasolio').click(); await p.attendiMsg(/Gasolio salvato/);
+  p.tab('riep');
+  assert.strictEqual(d.querySelectorAll('#gasolio table')[0].tBodies[0].rows[0].cells[5].textContent, '0 €');
+  assert.match($('gasolio').textContent, /entro la franchigia/);
+
   // estrazione Excel con il foglio Viaggi
   p.tab('riep'); $('btnXlsx').click(); await p.attendiMsg(/File Excel generato/);
   const ab = await p.leggiBlob(w.__scaricati.at(-1).blob, 'readAsArrayBuffer');
   const out = new ExcelJS.Workbook(); await out.xlsx.load(Buffer.from(ab));
-  assert.deepStrictEqual(out.worksheets.map(x => x.name), ['Riepilogo', 'Dettaglio PV', 'Viaggi', 'Parametri']);
+  assert.deepStrictEqual(out.worksheets.map(x => x.name), ['Riepilogo', 'Dettaglio PV', 'Viaggi', 'Gasolio e CO2', 'Gasolio mesi', 'Parametri']);
   assert.strictEqual(out.getWorksheet('Viaggi').rowCount, 3);
   assert.ok(!JSON.stringify(out.getWorksheet('Viaggi').getSheetValues()).includes('ROSSI'));
 
@@ -497,5 +521,22 @@ test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione
   assert.strictEqual(righe.length, 3);
   const sopra = righe.slice(0, 2).map(r => Number(r.cells[8].textContent.replace(/[^\d,-]/g, '').replace(',', '.')));
   sopra.forEach(v => assert.ok(v >= -1, 'sede che costa meno dell\'ottimo: ' + v));
+  assert.deepStrictEqual(p.errori, []);
+});
+
+test('database senza la tabella gasolio (migrazione 4 non ancora eseguita): l\'app si apre e lo segnala', async () => {
+  const supa = creaSupabaseFinto(caricaFunzioneOrs(creaOrsFinto().fetch), { sessione: { user: { email: 'a@b.it' }, access_token: 'jwt-valido' } });
+  const orig = supa.client.from.bind(supa.client);
+  supa.client.from = t => {
+    if (t !== 'gasolio') return orig(t);
+    const q = { select: () => q, order: () => q, range: () => Promise.resolve({ data: null, error: { message: 'relation "public.gasolio" does not exist' } }) };
+    return q;
+  };
+  const p = apriPagina({ supa });
+  await p.finche(() => !p.$('tab-pv').hidden && p.libero() && p.$('pEuroKm').value === '1,30', 'dati caricati');
+  p.tab('conf');
+  assert.match(p.$('gasolioMesi').textContent, /Versione 4/);
+  assert.strictEqual(p.$('gRif').value, '1,289');
+  p.$('btnGasolio').click(); await p.attendiMsg(/Versione 4/);
   assert.deepStrictEqual(p.errori, []);
 });

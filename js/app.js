@@ -10,7 +10,7 @@
   var BLOCCO_DB = 500;
 
   var sb = null;
-  var S = { P: null, sedi: {}, pv: [], dist: [], carichi: [], reparti: {}, vol: null, viaggi: [], tariffe: [], ultimiErroriDist: [], importPronto: null };
+  var S = { P: null, sedi: {}, pv: [], dist: [], carichi: [], reparti: {}, vol: null, viaggi: [], tariffe: [], gasolio: {}, gasolioOk: true, ultimiErroriDist: [], importPronto: null };
   function conViaggi() { return S.viaggi.length > 0; }
   function mappaPV() { var m = {}; S.pv.forEach(function (p) { m[p.codice] = p; }); return m; }
   function ricalcoloViaggi() { return C.ricalcolaViaggi(S.viaggi, S.sedi, S.dist, mappaPV(), S.P, S.tariffe); }
@@ -120,6 +120,10 @@
     S.P = { euro_km: Number(p.euro_km), km_fatturati: p.km_fatturati, capacita_pallet: Number(p.capacita_pallet), costo_fisso_viaggio: Number(p.costo_fisso_viaggio),
       settimane_anno: Number(p.settimane_anno), giorni_settimana: p.giorni_settimana == null ? 6 : Number(p.giorni_settimana),
       anno_tariffa: p.anno_tariffa == null ? null : Number(p.anno_tariffa) };
+    ['gas_rif', 'gas_quota', 'gas_franchigia', 'consumo_motrice', 'consumo_bilico', 'co2_kg_l'].forEach(function (k) { if (p[k] != null) S.P[k] = Number(p[k]); });
+    S.gasolio = {}; S.gasolioOk = true;
+    try { (await leggiTutto('gasolio', ['mese'])).forEach(function (g) { S.gasolio[g.mese] = Number(g.prezzo); }); }
+    catch (e) { S.gasolioOk = false; } // tabella non ancora creata (schema.sql versione 4)
     S.sedi = {};
     r[1].forEach(function (s) {
       S.sedi[s.codice] = { codice: s.codice, nome: s.nome, indirizzo: s.indirizzo || '', lat: s.lat == null ? null : Number(s.lat), lng: s.lng == null ? null : Number(s.lng),
@@ -289,6 +293,7 @@
     $('pGiorni').value = p.giorni_settimana;
     disegnaReparti();
     disegnaTariffe();
+    disegnaGasolioConf();
     $('pvLista').innerHTML = S.pv.map(function (x) { return '<option value="' + esc(x.codice) + '">' + esc(x.nome) + '</option>'; }).join('');
     $('sediForm').innerHTML = ['ATTUALE', 'OPZ1', 'OPZ2', 'OPZ3'].map(function (c) {
       var s = S.sedi[c], pr = s.lat != null ? precisione(s.geocodifica) : null;
@@ -346,6 +351,79 @@
       msg('Tariffario ' + anni.join(', ') + ' caricato: ' + righe.length + ' righe.', 'ok');
     }, 'Caricamento del tariffario…').catch(function () {}).then(function () { input.value = ''; });
   });
+
+  /* ============================ gasolio e CO2 ============================ */
+  function percento(x) { return fmt(x * 100, 1).replace(/\./g, ''); }
+  function mesiGasolioNecessari() {
+    var m = {};
+    S.viaggi.forEach(function (v) { m[C.meseDi(v.data, -1)] = true; });
+    Object.keys(S.gasolio).forEach(function (k) { m[k] = true; });
+    return Object.keys(m).sort();
+  }
+  function nomeMese(k) { var n = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic']; return n[Number(k.slice(5, 7)) - 1] + ' ' + k.slice(0, 4); }
+  function disegnaGasolioConf() {
+    var G = C.parametriGasolio(S.P);
+    $('gRif').value = fmt(G.rif, 3).replace(/\./g, ''); $('gQuota').value = percento(G.quota); $('gFranchigia').value = percento(G.franchigia);
+    $('gConsMot').value = fmt(G.consumoMotrice, 2); $('gConsBil').value = fmt(G.consumoBilico, 2); $('gCo2').value = fmt(G.co2, 2);
+    var h;
+    if (!S.gasolioOk) h = '<div class="alert warn">Tabella "gasolio" assente nel database: eseguire la parte "Versione 4" di supabase/schema.sql.</div>';
+    else {
+      var mesi = mesiGasolioNecessari();
+      h = '<p class="muted">Prezzo medio mensile del gasolio €/l (netto IVA e accise rimborsate). ' + (mesi.length ? 'Sono elencati i mesi che servono ai viaggi importati.' : 'Importare i viaggi per vedere i mesi da compilare.') + '</p>';
+      if (mesi.length) h += '<div class="grid">' + mesi.map(function (k) {
+        return '<label>' + esc(nomeMese(k)) + '<input class="gPrezzo" data-mese="' + esc(k) + '" inputmode="decimal" placeholder="€/l" value="' + (S.gasolio[k] ? fmt(S.gasolio[k], 3) : '') + '"></label>';
+      }).join('') + '</div>';
+    }
+    $('gasolioMesi').innerHTML = h;
+  }
+  $('btnGasolio').addEventListener('click', function () {
+    esegui(async function () {
+      var pc = function (id, nome, max) { var x = C.num($(id).value, nome); if (!(x >= 0 && x < max)) throw new Error(nome + ': valore fuori intervallo.'); return x / 100; };
+      var pos = function (id, nome, max) { var x = C.num($(id).value, nome); if (!(x > 0 && x < max)) throw new Error(nome + ': valore fuori intervallo.'); return x; };
+      var v = { gas_rif: pos('gRif', 'prezzo di riferimento', 10), gas_quota: pc('gQuota', 'quota legata al gasolio', 100.0001), gas_franchigia: pc('gFranchigia', 'franchigia', 100),
+        consumo_motrice: pos('gConsMot', 'consumo motrice', 2), consumo_bilico: pos('gConsBil', 'consumo bilico', 2), co2_kg_l: pos('gCo2', 'CO₂ per litro', 10) };
+      if (!S.gasolioOk) throw new Error('Tabella "gasolio" assente: eseguire la parte "Versione 4" di supabase/schema.sql.');
+      var nuovi = [], vuoti = [];
+      Array.prototype.forEach.call(document.querySelectorAll('#gasolioMesi .gPrezzo'), function (i) {
+        var t = i.value.trim();
+        if (t === '') { if (S.gasolio[i.dataset.mese]) vuoti.push(i.dataset.mese); return; }
+        var x = C.num(t, 'prezzo di ' + nomeMese(i.dataset.mese));
+        if (!(x > 0.3 && x < 5)) throw new Error('Prezzo di ' + nomeMese(i.dataset.mese) + ' non plausibile: ' + t + ' €/l.');
+        nuovi.push({ mese: i.dataset.mese, prezzo: x });
+      });
+      await aggiorna('parametri', 'id', 1, Object.assign({ aggiornato_il: new Date().toISOString() }, v));
+      if (nuovi.length) await upsert('gasolio', nuovi, 'mese');
+      await elimina('gasolio', 'mese', vuoti);
+      Object.assign(S.P, v);
+      nuovi.forEach(function (r) { S.gasolio[r.mese] = r.prezzo; }); vuoti.forEach(function (k) { delete S.gasolio[k]; });
+      disegnaTutto(); msg('Gasolio salvato: ' + nuovi.length + ' prezzi mensili.', 'ok');
+    }).catch(function () {});
+  });
+  function calcoloGasolio(R) { return C.gasolioViaggi(R || ricalcoloViaggi(), S.gasolio, C.parametriGasolio(S.P)); }
+  function disegnaGasolio(R) {
+    var box = $('gasolio');
+    if (!conViaggi()) { box.hidden = true; box.innerHTML = ''; return; }
+    R = R || ricalcoloViaggi(); var g = calcoloGasolio(R), G = g.parametri;
+    var h = '<h2>Gasolio e CO₂</h2><p class="muted">Adeguamento gasolio: ' + percento(G.quota) + '% della tariffa, riferimento ' + fmt(G.rif, 3) + ' €/l, franchigia ' + percento(G.franchigia) +
+      '% (oltre la franchigia si applica tutta la variazione; prezzo del mese precedente). CO₂: consumo ' + fmt(G.consumoMotrice, 2) + ' l/km motrice, ' + fmt(G.consumoBilico, 2) + ' l/km bilico, ' + fmt(G.co2, 2) + ' kg/l. Valori annui = periodo × ' + fmt(R.periodo.fattoreAnno, 2) + '.</p>';
+    if (!S.gasolioOk) h += '<div class="alert warn">Tabella "gasolio" assente nel database: l\'adeguamento è calcolato a zero. Eseguire la parte "Versione 4" di supabase/schema.sql.</div>';
+    else if (g.mesiMancanti.length) h += '<div class="alert warn">Prezzo del gasolio mancante per: ' + g.mesiMancanti.map(nomeMese).join(', ') + '. Per quei mesi l\'adeguamento è calcolato a zero: inserirlo in Configurazione.</div>';
+    h += '<div class="scroll"><table><thead><tr><th>Sede</th><th>Litri / anno</th><th>CO₂ t / anno</th><th>Δ CO₂ t / anno vs attuale</th><th>Δ CO₂ %</th>' +
+      '<th>Adeguamento gasolio / anno</th><th>Δ adeguamento / anno</th><th>Costo con adeguamento / anno</th><th>Δ costo con adeguamento / anno</th></tr></thead><tbody>' +
+      g.sedi.map(function (s) {
+        var d = s.delta;
+        return '<tr><td><b>' + esc(S.sedi[s.codice].nome) + '</b></td><td>' + fmt(s.anno.litri, 0) + '</td><td>' + fmt(s.anno.co2, 1) + '</td>' +
+          '<td>' + (d ? segno(d.co2, 1, ' t') : '') + '</td><td>' + (d && d.co2Pct != null ? segno(d.co2Pct, 1, ' %') : '') + '</td>' +
+          '<td>' + eur(s.anno.adeguamento) + '</td><td>' + (d ? segno(d.adeguamento, 0, ' €') : '') + '</td>' +
+          '<td>' + eur(s.anno.costoTotale) + '</td><td>' + (d ? segno(d.costoTotale, 0, ' €') : '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+    h += '<details><summary>Adeguamento mese per mese</summary><div class="scroll"><table><thead><tr><th>Mese dei viaggi</th><th>Prezzo del mese precedente</th><th>Variazione</th><th>Adeguamento sulla tariffa</th><th>Viaggi</th></tr></thead><tbody>' +
+      g.mesi.map(function (m) {
+        return '<tr><td>' + esc(nomeMese(m.mese)) + '</td><td>' + (m.prezzo == null ? '<span class="avviso">mancante (' + esc(nomeMese(m.mesePrezzo)) + ')</span>' : fmt(m.prezzo, 3) + ' €/l (' + esc(nomeMese(m.mesePrezzo)) + ')') + '</td>' +
+          '<td>' + (m.variazione == null ? '—' : segno(m.variazione * 100, 2, ' %')) + '</td><td>' + (m.mancante ? '—' : m.applicato ? segno(m.adeguamento * 100, 2, ' %') : '0 (entro la franchigia)') + '</td><td>' + fmt(m.viaggi, 0) + '</td></tr>';
+      }).join('') + '</tbody></table></div></details>';
+    box.innerHTML = h; box.hidden = false;
+  }
 
   function disegnaReparti() {
     var nomi = Object.keys(S.reparti).sort();
@@ -541,11 +619,13 @@
           '<td>' + (s.sopraOttimo == null ? '' : eur(s.sopraOttimo)) + '</td></tr>';
       }).join('') + '</tbody></table></div>';
     $('riepilogo').innerHTML = h;
+    disegnaGasolio(R);
   }
 
   /* ============================ maschera 2 ============================ */
   function disegnaRiepilogo() {
     if (conViaggi()) { disegnaRiepilogoViaggi(); disegnaQualita(); return; }
+    disegnaGasolio();
     var t = C.tabella(S.P, S.sedi, S.pv, S.dist);
     var ries = C.riepilogo(S.P, S.sedi, t);
     if (!ries.length) { $('riepilogo').innerHTML = '<span class="muted">Nessuna sede configurata.</span>'; $('qualita').innerHTML = ''; return; }
@@ -657,13 +737,20 @@
         foglio('Riepilogo', d.intestazioneRiepilogo, d.riepilogo, [null, null, '#,##0', '#,##0', '#,##0', '#,##0', '#,##0', '0.0', '#,##0']);
         foglio('Dettaglio PV', d.intestazione, d.righe, [null, null, null, '#,##0', '#,##0', '#,##0', '#,##0', '0.0']);
         foglio('Viaggi', d.intestazioneViaggi, d.viaggi, null);
+        var eg = C.estrazioneGasolio(S.sedi, calcoloGasolio());
+        foglio('Gasolio e CO2', eg.intestazione, eg.righe, [null, '#,##0', '#,##0', '#,##0.0', '#,##0', '#,##0', '#,##0.0', '#,##0.0', '0.0', '#,##0', '#,##0', '#,##0', '#,##0']);
+        foglio('Gasolio mesi', eg.intestazioneMesi, eg.mesi, [null, null, '0.000', '0.00', null, '0.00', '#,##0']);
       } else {
         foglio('Riepilogo', d.intestazioneRiepilogo, d.riepilogo, [null, null, '0.0', '#,##0', '#,##0', '#,##0', '0.0', '#,##0']);
         foglio('Dettaglio', d.intestazione, d.righe, [null, null, null, '0.0', '0.0', '0.0', '0.0', '#,##0.00', '#,##0', '#,##0', '0.0']);
       }
       var per = conViaggi() ? C.periodoViaggi(S.viaggi) : null;
       foglio('Parametri', ['Parametro', 'Valore'], (per ? [['Metodo', 'Ricalcolo dei viaggi reali da ogni sede'], ['Periodo viaggi', per.dal + ' – ' + per.al + ' (' + per.giorni + ' giorni)'],
-        ['Viaggi', S.viaggi.length], ['Tariffario', S.tariffe.length ? 'anno ' + annoTariffaInUso() : 'non inserito (€/km dei parametri)']] : []).concat([
+        ['Viaggi', S.viaggi.length], ['Tariffario', S.tariffe.length ? 'anno ' + annoTariffaInUso() : 'non inserito (€/km dei parametri)']].concat((function () {
+          var G = C.parametriGasolio(S.P);
+          return [['Gasolio: prezzo di riferimento €/l', G.rif], ['Gasolio: quota della tariffa', G.quota], ['Gasolio: franchigia', G.franchigia],
+            ['Consumo motrice l/km', G.consumoMotrice], ['Consumo bilico l/km', G.consumoBilico], ['CO₂ kg per litro', G.co2]];
+        })()) : []).concat([
         ['Tariffa €/km', S.P.euro_km], ['Km fatturati', S.P.km_fatturati === 'AR' ? 'andata e ritorno' : 'solo andata'],
         ['Capacità mezzo standard (pallet)', S.P.capacita_pallet], ['Costo fisso per viaggio €', S.P.costo_fisso_viaggio],
         ['Settimane operative/anno', S.P.settimane_anno], ['Distanze', 'OpenRouteService, profilo mezzi pesanti'], ['Data estrazione', oggi()]
@@ -687,7 +774,7 @@
       if (!(gs >= 1 && gs <= 7)) throw new Error('I giorni lavorativi a settimana devono essere tra 1 e 7.');
       p.giorni_settimana = gs;
       await aggiorna('parametri', 'id', 1, Object.assign({ aggiornato_il: new Date().toISOString() }, p));
-      S.P = p; ricalcolaVolumi(); disegnaTutto(); msg('Parametri salvati.', 'ok');
+      S.P = Object.assign({}, S.P, p); ricalcolaVolumi(); disegnaTutto(); msg('Parametri salvati.', 'ok');
     }).catch(function () {});
   });
 

@@ -144,3 +144,21 @@ drop policy if exists "utenti autenticati" on public.tariffe;
 create policy "utenti autenticati" on public.viaggi for all to authenticated using (true) with check (true);
 create policy "utenti autenticati" on public.viaggi_clienti for all to authenticated using (true) with check (true);
 create policy "utenti autenticati" on public.tariffe for all to authenticated using (true) with check (true);
+
+-- ============ Versione 4: adeguamento gasolio (Allegato E) e CO2 ============
+-- Prezzo medio mensile del gasolio (€/l al netto di IVA e accise rimborsate, tabelle MIT/MASE).
+-- L'adeguamento dei viaggi di un mese usa il prezzo del mese precedente.
+create table if not exists public.gasolio (
+  mese   text primary key check (mese ~ '^\d{4}-(0[1-9]|1[0-2])$'),
+  prezzo numeric not null check (prezzo > 0)
+);
+alter table public.parametri add column if not exists gas_rif numeric not null default 1.289 check (gas_rif > 0);
+alter table public.parametri add column if not exists gas_quota numeric not null default 0.30 check (gas_quota >= 0 and gas_quota <= 1);
+alter table public.parametri add column if not exists gas_franchigia numeric not null default 0.05 check (gas_franchigia >= 0 and gas_franchigia < 1);
+alter table public.parametri add column if not exists consumo_motrice numeric not null default 0.28 check (consumo_motrice > 0);
+alter table public.parametri add column if not exists consumo_bilico numeric not null default 0.33 check (consumo_bilico > 0);
+alter table public.parametri add column if not exists co2_kg_l numeric not null default 2.65 check (co2_kg_l > 0);
+
+alter table public.gasolio enable row level security;
+drop policy if exists "utenti autenticati" on public.gasolio;
+create policy "utenti autenticati" on public.gasolio for all to authenticated using (true) with check (true);
