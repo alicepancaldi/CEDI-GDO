@@ -161,8 +161,8 @@
   }
 
   /* ---------- mappe su cartina (Leaflet + OpenStreetMap), con ripiego sulla mappa schematica ---------- */
-  var TILE = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-  var ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  var TILE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  var ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
   var mappeAttive = [];
 
   function riquadroSedi(sedi, km) {
@@ -174,17 +174,20 @@
   /** Disegna clienti e sedi su cartina reale nel div el; etichette fisse delle sedi solo nella mappa ingrandita. */
   function mappaGeo(L, el, punti, sedi, limiti, etichette) {
     var m = L.map(el, { scrollWheelZoom: false, attributionControl: true });
-    L.tileLayer(TILE, { subdomains: 'abcd', maxZoom: 19, attribution: ATTRIB }).addTo(m);
+    L.tileLayer(TILE, { maxZoom: 19, attribution: ATTRIB }).addTo(m);
     L.control.scale({ imperial: false }).addTo(m);
     var vmax = Math.max.apply(null, punti.map(function (p) { return p.viaggi; }).concat([1]));
     punti.slice().sort(function (a, b) { return b.viaggi - a.viaggi; }).forEach(function (p) {
       L.circleMarker([p.lat, p.lng], { radius: 2 + 8 * Math.sqrt(p.viaggi / vmax), color: '#000000', weight: 0.7, fillColor: '#FFFFFF', fillOpacity: 0.85 })
         .bindTooltip(esc(p.codice + ' ' + p.nome) + ': ' + p.viaggi + ' viaggi').addTo(m);
     });
+    // etichetta a sinistra se un'altra sede è subito a est (evita sovrapposizioni, es. Cellamare e ottimo)
+    var aSinistra = function (s) { return sedi.some(function (q) { return q !== s && q.lng > s.lng && q.lng - s.lng < 0.12 && Math.abs(q.lat - s.lat) < 0.05; }); };
     sedi.forEach(function (s) {
+      var sx = aSinistra(s);
       var icona = L.divIcon({ className: 'sede-geo', iconSize: [16, 16], iconAnchor: [8, 8], html: '<span style="background:' + colore(s.codice) + '"></span>' });
       L.marker([s.lat, s.lng], { icon: icona, zIndexOffset: 1000, keyboard: false, title: s.nome })
-        .bindTooltip(esc(s.nome), { permanent: !!etichette, direction: 'right', offset: [8, 0], className: 'etichetta-sede' }).addTo(m);
+        .bindTooltip(esc(s.nome), { permanent: !!etichette, direction: sx ? 'left' : 'right', offset: [sx ? -8 : 8, 0], className: 'etichetta-sede' }).addTo(m);
     });
     var adatta = function () { m.invalidateSize(); m.fitBounds(limiti, { padding: [12, 12] }); };
     adatta();

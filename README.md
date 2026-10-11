@@ -93,7 +93,7 @@ In Configurazione → "Adeguamento gasolio e CO₂" si inseriscono i parametri e
 - È un riferimento teorico: può cadere in un punto non edificabile.
 
 ## Note operative
-- Le mappe della scheda Dashboard usano la cartina OpenStreetMap (sfondo CARTO chiaro) con la libreria Leaflet 1.9.4, inclusa in js/vendor. Le mattonelle della cartina arrivano da internet; senza connessione si vede la mappa schematica.
+- Le mappe della scheda Dashboard usano la cartina OpenStreetMap (mattonelle tile.openstreetmap.org, attenuate in grigio) con la libreria Leaflet 1.9.4, inclusa in js/vendor. Le mattonelle della cartina arrivano da internet; senza connessione si vede la mappa schematica.
 - Le distanze vengono calcolate una volta sola e salvate. Si ricalcolano solo per le sedi o i PV spostati.
 - La pagina rispetta i limiti al minuto di OpenRouteService e, se il limite viene raggiunto, aspetta e riprova da sola. Le quote giornaliere del piano gratuito si vedono nella dashboard ORS. Per centinaia di PV bastano poche decine di richieste, perché ogni richiesta copre fino a 45 tratte.
 - Precisione delle posizioni:
