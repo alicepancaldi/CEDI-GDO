@@ -715,7 +715,7 @@
       if (!mesi[mv]) {
         var mp = mv, p = prezzi[mp], a = adeguamentoGasolio(p, G);
         mesi[mv] = { mese: mv, mesePrezzo: mp, prezzo: a ? Number(p) : null, variazione: a ? a.variazione : null, applicato: a ? a.applicato : false,
-          adeguamento: a ? a.adeguamento : 0, mancante: !a, viaggi: 0 };
+          adeguamento: a ? a.adeguamento : 0, mancante: !a, viaggi: 0, sedi: {} };
       }
       var M = mesi[mv];
       M.viaggi++;
@@ -724,6 +724,8 @@
         var x = d.sedi[c]; if (!x) return;
         var t = tot[c], km = x.km * (G.fatt === 2 ? 1 : 2);
         t.viaggi++; t.costoBase += x.costo; t.adeguamento += x.costo * M.adeguamento; t.kmPercorsi += km; t.litri += km * cons;
+        var ms = M.sedi[c] = M.sedi[c] || { viaggi: 0, costoBase: 0, adeguamento: 0, km: 0, litri: 0 };
+        ms.viaggi++; ms.costoBase += x.costo; ms.adeguamento += x.costo * M.adeguamento; ms.km += x.km; ms.litri += km * cons;
       });
     });
     var f = R.periodo ? R.periodo.fattoreAnno : 0, rif = tot.ATTUALE;

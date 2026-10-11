@@ -36,6 +36,7 @@ function apriPagina({ config = { SUPABASE_URL: 'https://x.supabase.co', SUPABASE
   w.supabase = { createClient: () => S.client };
   w.eval('window.CONFIG = ' + JSON.stringify(Object.assign({ PAUSA_MATRICE_MS: 0, PAUSA_GEOCODIFICA_MS: 0, PAUSA_LIMITE_MS: 10 }, config)) + ';');
   w.eval(leggi('js/calcolo.js'));
+  w.eval(leggi('js/dashboard.js'));
   w.eval(leggi('js/app.js'));
   const d = w.document, $ = id => d.getElementById(id);
   const P = {
@@ -513,6 +514,14 @@ test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione
   assert.strictEqual(d.querySelectorAll('#gasolio table')[0].tBodies[0].rows[0].cells[5].textContent, '0 €');
   assert.match($('gasolio').textContent, /entro la franchigia/);
 
+  // dashboard
+  p.tab('dash');
+  assert.strictEqual(d.querySelectorAll('#dashboard .tessera').length, 2);
+  assert.match($('dashboard').textContent, /2 viaggi reali dal 2026-08-01 al 2026-08-10/);
+  assert.ok(d.querySelectorAll('#dashboard svg').length >= 3);
+  assert.match($('dashboard').textContent, /Interporto = 0/);
+  p.tab('riep');
+
   // estrazione Excel con il foglio Viaggi
   p.tab('riep'); $('btnXlsx').click(); await p.attendiMsg(/File Excel generato/);
   const ab = await p.leggiBlob(w.__scaricati.at(-1).blob, 'readAsArrayBuffer');
@@ -568,4 +577,26 @@ test('perimetro: PV in Campania già nel database esclusi da calcoli, viaggi e m
   p.$('btnSalvaPV').click(); await p.attendiMsg(/fuori dal perimetro/);
   assert.ok(!supa.db.punti_vendita.some(x => x.codice === '999'));
   assert.deepStrictEqual(p.errori, []);
+});
+
+test('dashboard: più mesi, prezzo mancante, mappa', () => {
+  const dom = new JSDOM('<div id="d"></div>', { runScripts: 'outside-only' });
+  dom.window.eval(leggi('js/dashboard.js'));
+  const sede = (c, n, costo, dc, co2, dco2) => ({ codice: c, nome: n, costoAnno: costo, deltaAnno: dc, deltaPct: dc == null ? null : dc / 6e6 * 100, co2Anno: co2, deltaCo2: dco2, deltaCo2Pct: dco2 == null ? null : dco2 / 3500 * 100, adeguamentoAnno: 280000 });
+  const ms = (m, adeg, mancante) => ({ mese: m, prezzo: mancante ? null : 1.5, variazione: mancante ? null : 0.16, adeguamento: adeg, mancante, viaggi: 2000,
+    sedi: { ATTUALE: { costoTot: 500000, adeguamento: 500000 * adeg }, OPZ1: { costoTot: 494000, adeguamento: 1 }, OPZ2: { costoTot: 555000, adeguamento: 1 }, OTTIMO: { costoTot: 495000, adeguamento: 1 } } });
+  const D = { periodo: { dal: '2026-05-02', al: '2026-08-31', giorni: 122, viaggi: 8772, clienti: 338 },
+    sedi: [sede('ATTUALE', 'Interporto', 6.3e6, null, 3497, null), sede('OPZ1', 'Cellamare', 6.24e6, -67788, 3454, -43), sede('OPZ2', 'Molfetta', 6.98e6, 669306, 3867, 370), sede('OTTIMO', 'Punto di ottimo', 6.25e6, -55105, 3463, -35)],
+    mesi: [ms('2026-05', 0.0449), ms('2026-06', 0.0089), ms('2026-07', 0, true)], franchigia: 0.05, mesiMancanti: ['2026-07'], nota: '',
+    punti: [{ codice: '1', nome: 'A', lat: 41.1, lng: 16.8, viaggi: 50 }, { codice: '2', nome: 'B', lat: 40.4, lng: 17.9, viaggi: 10 }],
+    sediPos: [{ codice: 'ATTUALE', nome: 'Interporto', lat: 41.08, lng: 16.84 }, { codice: 'OPZ1', nome: 'Cellamare', lat: 41.02, lng: 16.92 }, { codice: 'OPZ2', nome: 'Molfetta', lat: 41.2, lng: 16.6 }] };
+  const el = dom.window.document.getElementById('d');
+  dom.window.Dashboard.disegna(el, D);
+  assert.strictEqual(el.querySelectorAll('.tessera').length, 4);
+  assert.strictEqual(el.querySelectorAll('svg').length, 5);
+  assert.match(el.textContent, /Prezzo del gasolio mancante per: lug 26/);
+  assert.match(el.textContent, /Cellamare −1,2%/);
+  assert.ok(!/NaN|undefined/.test(el.innerHTML));
+  dom.window.Dashboard.disegna(el, null);
+  assert.match(el.textContent, /Importare i viaggi reali/);
 });

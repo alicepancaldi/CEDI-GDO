@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Simulatore CEDI</title>
-<link rel="stylesheet" href="css/app.css?v=12">
+<link rel="stylesheet" href="css/app.css?v=13">
 </head>
 <body>
 <header>
@@ -17,6 +17,7 @@
   <nav id="nav" hidden>
     <button data-tab="pv" class="on">Confronto punto vendita</button>
     <button data-tab="riep">Riepilogo ed estrazione</button>
+    <button data-tab="dash">Dashboard</button>
     <button data-tab="conf">Configurazione e import</button>
   </nav>
 </header>
@@ -72,6 +73,11 @@
     <div class="card" id="riepilogo"></div>
     <div class="card" id="gasolio" hidden></div>
     <div class="card" id="qualita"></div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="tab-dash" hidden>
+    <div id="dashboard"></div>
   </section>
 
   <!-- CONFIGURAZIONE E IMPORT -->
@@ -143,8 +149,9 @@
 <script src="js/vendor/supabase-2.117.3.js"></script>
 <script src="js/vendor/exceljs-4.4.0.min.js"></script>
 <script src="js/vendor/xlsx-0.18.5.full.min.js"></script>
-<script src="js/config.js?v=12"></script>
-<script src="js/calcolo.js?v=12"></script>
-<script src="js/app.js?v=12"></script>
+<script src="js/config.js?v=13"></script>
+<script src="js/calcolo.js?v=13"></script>
+<script src="js/dashboard.js?v=13"></script>
+<script src="js/app.js?v=13"></script>
 </body>
 </html>

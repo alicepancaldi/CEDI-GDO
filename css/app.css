@@ -46,3 +46,10 @@ tr.sep td { background:#fafbfc; color:var(--mut); font-size:12px; }
 .sede label { margin-bottom:0; }
 .span3 { grid-column:span 4; padding-bottom:16px; }
 @media (max-width:860px) { .sede { grid-template-columns:1fr; } .span3 { grid-column:auto; } .wide { grid-column:auto; } }
+.kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+.tessera { border:1px solid var(--bd); border-top:4px solid var(--mut); border-radius:8px; padding:12px 14px; }
+.t-nome { font-size:13px; color:var(--mut); margin-bottom:4px; }
+.t-val { font-size:22px; font-weight:650; }
+.t-u { font-size:12px; font-weight:400; color:var(--mut); }
+.t-d { font-size:14px; margin:4px 0; }
+.t-sub { font-size:12px; color:var(--mut); }

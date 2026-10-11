@@ -284,7 +284,8 @@
   function mostraScheda(t) {
     schedaCorrente = t;
     Array.prototype.forEach.call(document.querySelectorAll('#nav button'), function (x) { x.classList.toggle('on', x.dataset.tab === t); });
-    ['login', 'pv', 'riep', 'conf'].forEach(function (n) { $('tab-' + n).hidden = n !== t; });
+    ['login', 'pv', 'riep', 'dash', 'conf'].forEach(function (n) { $('tab-' + n).hidden = n !== t; });
+    if (t === 'dash') disegnaDashboard();
     if (t === 'riep') disegnaRiepilogo();
   }
   Array.prototype.forEach.call(document.querySelectorAll('#nav button'), function (b) {
@@ -315,7 +316,37 @@
     var o = S.sedi.OTTIMO;
     $('ottimoInfo').textContent = o.lat != null ? o.indirizzo + '  (' + coordTesto(o) + ')' : 'Non calcolato';
     if (schedaCorrente === 'riep') disegnaRiepilogo();
+    if (schedaCorrente === 'dash') disegnaDashboard();
   }
+
+  /* ============================ dashboard ============================ */
+  function datiDashboard() {
+    if (!conViaggi()) return null;
+    var R = ricalcoloViaggi(), g = calcoloGasolio(R), gs = {};
+    g.sedi.forEach(function (x) { gs[x.codice] = x; });
+    var att = gs.ATTUALE;
+    var mancanti = R.attive.reduce(function (t, c) { return t + R.tot[c].mancanti; }, 0);
+    var sedi = R.attive.map(function (c) {
+      var x = gs[c], d = x.delta;
+      return { codice: c, nome: S.sedi[c].nome, costoAnno: x.anno.costoTotale, deltaAnno: d ? d.costoTotale : null,
+        deltaPct: d && att && att.anno.costoTotale ? d.costoTotale / att.anno.costoTotale * 100 : null,
+        co2Anno: x.anno.co2, deltaCo2: d ? d.co2 : null, deltaCo2Pct: d ? d.co2Pct : null, adeguamentoAnno: x.anno.adeguamento };
+    });
+    var mesi = g.mesi.map(function (m) {
+      var ss = {};
+      Object.keys(m.sedi).forEach(function (c) { var x = m.sedi[c]; ss[c] = { costoTot: x.costoBase + x.adeguamento, adeguamento: x.adeguamento, km: x.km, co2: x.litri * g.parametri.co2 / 1000 }; });
+      return { mese: m.mese, prezzo: m.prezzo, variazione: m.variazione, adeguamento: m.adeguamento, mancante: m.mancante, viaggi: m.viaggi, sedi: ss };
+    });
+    var nv = {}; S.viaggi.forEach(function (v) { v.clienti.forEach(function (c) { nv[c.pv] = (nv[c.pv] || 0) + 1; }); });
+    var pm = mappaPV();
+    var punti = Object.keys(nv).filter(function (k) { return pm[k] && pm[k].lat != null; }).map(function (k) { return { codice: k, nome: pm[k].nome, lat: pm[k].lat, lng: pm[k].lng, viaggi: nv[k] }; });
+    var nota = (S.fuoriPerimetro || []).length ? 'Fuori perimetro (Campania): ' + S.fuoriPerimetro.length + ' punti vendita esclusi.' : '';
+    if (mancanti) nota += ' Attenzione: ' + mancanti + ' calcoli di viaggio senza distanza (premere "Aggiorna distanze" nel Riepilogo).';
+    return { periodo: { dal: R.periodo.dal, al: R.periodo.al, giorni: R.periodo.giorni, viaggi: S.viaggi.length, clienti: Object.keys(nv).length },
+      sedi: sedi, mesi: mesi, punti: punti, franchigia: g.parametri.franchigia, mesiMancanti: S.gasolioOk ? g.mesiMancanti : [], nota: nota.trim(),
+      sediPos: R.attive.map(function (c) { return { codice: c, nome: S.sedi[c].nome, lat: S.sedi[c].lat, lng: S.sedi[c].lng }; }) };
+  }
+  function disegnaDashboard() { window.Dashboard.disegna($('dashboard'), datiDashboard()); }
 
   function anniTariffe() { return S.tariffe.map(function (t) { return t.anno; }).filter(function (a, i, x) { return x.indexOf(a) === i; }).sort(); }
   function annoTariffaInUso() { var a = anniTariffe(); return S.P.anno_tariffa && a.indexOf(S.P.anno_tariffa) >= 0 ? S.P.anno_tariffa : a[a.length - 1]; }
