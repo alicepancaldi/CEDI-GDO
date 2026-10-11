@@ -407,3 +407,12 @@ test('gasolio: tabella MIT in €/1000 l → prezzo contrattuale (netto IVA e ri
   assert.deepStrictEqual(q, [{ mese: '2026-06', prezzo: 1.4 }]);
   assert.throws(() => C.preparaPrezziGasolio([['x', 'y']]), /Anno/);
 });
+
+test('ottimo sulle strade: costo dei viaggi da un punto qualsiasi e spostamento in km', () => {
+  const viaggi = [{ mezzo: 'MOT', clienti: [{ pv: 'A' }, { pv: 'B' }] }, { mezzo: 'MOT', clienti: [{ pv: 'C' }] }];
+  const r = C.costoViaggiDaKm(viaggi, { A: 10, B: 30, C: 5 }, { km_fatturati: 'AR', euro_km: 1.3, costo_fisso_viaggio: 0 }, []);
+  vicino(r.costo, 1.3 * 2 * 30 + 1.3 * 2 * 5); assert.strictEqual(r.mancanti, 0);
+  assert.strictEqual(C.costoViaggiDaKm(viaggi, { A: 10, B: 30 }, { km_fatturati: 'AR', euro_km: 1.3, costo_fisso_viaggio: 0 }, []).mancanti, 1);
+  const p = { lat: 41, lng: 16.9 }, q = C.spostaKm(p, 3, -4);
+  vicino(C.distanzaKm(p, q), 5, 0.01);
+});

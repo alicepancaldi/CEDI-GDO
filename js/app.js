@@ -836,6 +836,57 @@
     }).catch(function () {});
   });
 
+  /** Matrice stradale da punti qualsiasi (non sedi salvate) verso i PV: 5 origini × 45 destinazioni per richiesta. */
+  async function matricePunti(punti, pvLista, avanz) {
+    var out = punti.map(function () { return { km: {}, minuti: {} }; });
+    var gruppi = C.aBlocchi(punti.map(function (p, i) { return i; }), 5), blocchi = C.aBlocchi(pvLista, BLOCCO_MATRICE), n = 0, tot = gruppi.length * blocchi.length;
+    for (var g = 0; g < gruppi.length; g++) {
+      for (var b = 0; b < blocchi.length; b++) {
+        if (n > 0) await pausa(PAUSA_MATRICE_MS);
+        var res = await ors('matrice', { origini: gruppi[g].map(function (i) { return { lat: punti[i].lat, lng: punti[i].lng }; }),
+          destinazioni: blocchi[b].map(function (p) { return { lat: p.lat, lng: p.lng }; }) });
+        gruppi[g].forEach(function (i, r) {
+          blocchi[b].forEach(function (p, c) {
+            var km = res.km[r] && res.km[r][c], mi = res.minuti[r] && res.minuti[r][c];
+            if (km != null) { out[i].km[p.codice] = km; out[i].minuti[p.codice] = mi; }
+          });
+        });
+        n++; if (avanz) avanz(n, tot);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Affina l'ottimo sulle distanze stradali reali: parte dal migliore tra il punto stimato e le sedi configurate,
+   * poi ricerca a compasso (nord, sud, est, ovest) con passo 3 km dimezzato quando nessun vicino migliora, fino a 0,4 km.
+   */
+  async function affinaOttimoStrade(o0, avanz) {
+    var pvLista = S.pv.filter(function (p) { return p.lat != null; });
+    var k = C.tortuosita(S.sedi.ATTUALE, S.dist, mappaPV());
+    var valutati = 0, richieste = 0;
+    async function valuta(punti) {
+      var mat = await matricePunti(punti, pvLista, function () { richieste++; if (avanz) avanz(richieste, valutati + punti.length); });
+      valutati += punti.length;
+      return punti.map(function (p, i) {
+        var km = Object.assign({}, mat[i].km);
+        pvLista.forEach(function (q) { if (km[q.codice] == null) km[q.codice] = C.distanzaKm(p, q) * k; }); // cliente non raggiungibile: stima
+        return { lat: p.lat, lng: p.lng, costo: C.costoViaggiDaKm(S.viaggi, km, S.P, S.tariffe).costo, km: mat[i].km, minuti: mat[i].minuti };
+      });
+    }
+    var semi = [{ lat: o0.lat, lng: o0.lng }].concat(['ATTUALE', 'OPZ1', 'OPZ2', 'OPZ3'].filter(function (c) { return S.sedi[c] && S.sedi[c].lat != null; })
+      .map(function (c) { return { lat: S.sedi[c].lat, lng: S.sedi[c].lng }; }));
+    var r = await valuta(semi), best = r.reduce(function (a, b) { return b.costo < a.costo ? b : a; });
+    var passo = 3;
+    for (var it = 0; it < 12 && passo >= 0.4; it++) {
+      var vicini = [[passo, 0], [-passo, 0], [0, passo], [0, -passo]].map(function (d) { return C.spostaKm(best, d[0], d[1]); });
+      var rv = await valuta(vicini), mv = rv.reduce(function (a, b) { return b.costo < a.costo ? b : a; });
+      if (mv.costo < best.costo - 1) best = mv; else passo /= 2;
+    }
+    best.valutati = valutati; best.stimato = r[0].costo;
+    return best;
+  }
+
   $('btnOttimo').addEventListener('click', function () {
     esegui(async function () {
       var o;
@@ -844,6 +895,11 @@
         S.pv.forEach(function (p) { if (precisione(p.geocodifica).livello !== 'err') coord[p.codice] = { lat: p.lat, lng: p.lng }; });
         o = C.ottimoViaggi(S.viaggi, coord, S.P, S.tariffe, C.tortuosita(S.sedi.ATTUALE, S.dist, mappaPV()));
       } else o = C.weiszfeld(C.pesiOttimo(S.pv, S.P));
+      var affinato = null;
+      if (conViaggi()) {
+        affinato = await affinaOttimoStrade(o, function (n, v) { $('prog').textContent = 'Affinamento sulle strade vere: ' + v + ' punti valutati, richiesta ' + n; });
+        o = { lat: affinato.lat, lng: affinato.lng };
+      }
       var ind = null;
       try { var r = await ors('inversa', { lat: o.lat, lng: o.lng }); ind = r && r.indirizzo; } catch (e) { /* solo descrittivo */ }
       ind = ind || coordTesto(o);
@@ -851,10 +907,18 @@
       await elimina('distanze', 'sede', ['OTTIMO']);
       S.dist = S.dist.filter(function (d) { return d.sede !== 'OTTIMO'; });
       S.sedi.OTTIMO = { codice: 'OTTIMO', nome: 'Punto di ottimo', indirizzo: ind, lat: o.lat, lng: o.lng, capacita: null, geocodifica: 'calcolato' };
+      if (affinato) { // distanze del punto finale già calcolate durante l'affinamento
+        var righeO = S.pv.filter(function (p) { return affinato.km[p.codice] != null; }).map(function (p) {
+          return { sede: 'OTTIMO', pv: p.codice, km: affinato.km[p.codice], minuti: affinato.minuti[p.codice], chiave: C.chiaveCoord(S.sedi.OTTIMO, p), aggiornato_il: new Date().toISOString() };
+        });
+        await upsert('distanze', righeO, 'sede,pv');
+        registraDistanze(righeO.map(function (x) { return { sede: x.sede, pv: x.pv, km: x.km, minuti: x.minuti, chiave: x.chiave }; }));
+      }
       disegnaTutto();
       var es = await calcolaDistanze(coppieMancanti(S.pv).filter(function (c) { return c.sede === 'OTTIMO'; }), function (k, n) { $('prog').textContent = 'Distanze dall\'ottimo: richiesta ' + k + ' di ' + n; });
       $('prog').textContent = '';
       msg('Punto di ottimo calcolato ' + (conViaggi() ? 'sui ' + S.viaggi.length + ' viaggi reali' : 'su ' + S.pv.length + ' punti vendita') + ': ' + esc(ind) + ' (' + esc(coordTesto(o)) + '). ' +
+        (affinato ? 'Affinato sulle distanze stradali reali (' + affinato.valutati + ' punti valutati). ' : '') +
         (es.errori.length ? es.errori.length + ' distanze non trovate.' : 'Distanze calcolate: vedere il riepilogo.'), es.errori.length ? 'warn' : 'ok');
     }, 'Calcolo del punto di ottimo…').catch(function () {});
   });

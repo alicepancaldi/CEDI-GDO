@@ -601,6 +601,27 @@
     return { lat: best.lat, lng: best.lng, costoStimato: best.v };
   }
 
+  /**
+   * Costo dei viaggi reali da un punto qualsiasi, date le distanze stradali (km di sola andata) dal punto a ogni cliente.
+   * Serve ad affinare l'ottimo sulle strade vere.
+   */
+  function costoViaggiDaKm(viaggi, km, P, tariffe) {
+    var fatt = P.km_fatturati === 'AR' ? 2 : 1, tot = 0, mancanti = 0;
+    viaggi.forEach(function (v) {
+      var m = 0, manca = false;
+      v.clienti.forEach(function (c) { var d = km[c.pv]; if (d == null) { manca = true; return; } if (d > m) m = d; });
+      if (manca) { mancanti++; return; }
+      tot += costoViaggio(m * fatt, v.mezzo, tariffe, P);
+    });
+    return { costo: tot, mancanti: mancanti };
+  }
+
+  /** Punto spostato di dx km verso est e dy km verso nord (proiezione locale). */
+  function spostaKm(p, dx, dy) {
+    var kx = 111.320 * Math.cos(p.lat * Math.PI / 180), ky = 110.574;
+    return { lat: p.lat + dy / ky, lng: p.lng + dx / kx };
+  }
+
   /** Primo foglio non vuoto di un file Excel letto con SheetJS -> array di righe (date come numero seriale). */
   function righeDaExcel(XLSX, buffer) {
     var wb = XLSX.read(buffer, { type: 'array', dense: true, cellDates: false, cellFormula: false, cellHTML: false, cellText: false });
@@ -874,6 +895,6 @@
     ottimoViaggi: ottimoViaggi, preparaTariffe: preparaTariffe, righeDaExcel: righeDaExcel, tortuosita: tortuosita, estrazioneViaggi: estrazioneViaggi, periodoViaggi: periodoViaggi, REPARTI_CODICE: REPARTI_CODICE, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto,
     GASOLIO_DEF: GASOLIO_DEF, parametriGasolio: parametriGasolio, meseDi: meseDi, adeguamentoGasolio: adeguamentoGasolio, classeMezzo: classeMezzo,
     gasolioViaggi: gasolioViaggi, estrazioneGasolio: estrazioneGasolio,
-    PROVINCE_FUORI_PERIMETRO: PROVINCE_FUORI_PERIMETRO, fuoriPerimetro: fuoriPerimetro, pvFuoriPerimetro: pvFuoriPerimetro, capDaIndirizzo: capDaIndirizzo, ACCISA_AGEVOLATA: ACCISA_AGEVOLATA, prezzoContrattuale: prezzoContrattuale, preparaPrezziGasolio: preparaPrezziGasolio
+    PROVINCE_FUORI_PERIMETRO: PROVINCE_FUORI_PERIMETRO, fuoriPerimetro: fuoriPerimetro, pvFuoriPerimetro: pvFuoriPerimetro, capDaIndirizzo: capDaIndirizzo, costoViaggiDaKm: costoViaggiDaKm, spostaKm: spostaKm, ACCISA_AGEVOLATA: ACCISA_AGEVOLATA, prezzoContrattuale: prezzoContrattuale, preparaPrezziGasolio: preparaPrezziGasolio
   };
 });

@@ -523,7 +523,7 @@ test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione
 
   // ottimo sui viaggi
   p.tab('conf'); $('btnOttimo').click();
-  await p.attendiMsg(/Punto di ottimo calcolato sui 2 viaggi reali/);
+  await p.attendiMsg(/Punto di ottimo calcolato sui 2 viaggi reali.*Affinato sulle distanze stradali reali/);
   p.tab('riep');
   const righe = [...d.querySelectorAll('#riepilogo tbody tr')];
   assert.strictEqual(righe.length, 3);
