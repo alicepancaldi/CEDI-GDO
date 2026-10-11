@@ -45,7 +45,7 @@
     calcolato: ['punto calcolato', 'ok'], street: ['via trovata, numero civico no', 'ok'],
     neighbourhood: ['solo quartiere: verificare', 'warn'], postalcode: ['solo CAP: verificare', 'warn'],
     locality: ['solo comune: verificare', 'warn'], localadmin: ['solo comune: verificare', 'warn'],
-    borough: ['solo frazione: verificare', 'warn'], county: ['solo provincia: da correggere', 'err'],
+    borough: ['solo frazione: verificare', 'warn'], fuori_comune: ['via trovata fuori comune: usato il centro del comune, verificare', 'warn'], county: ['solo provincia: da correggere', 'err'],
     macrocounty: ['solo provincia: da correggere', 'err'], region: ['solo regione: da correggere', 'err'], country: ['solo nazione: da correggere', 'err']
   };
   function precisione(g) { return PRECISIONE[g] ? { testo: PRECISIONE[g][0], livello: PRECISIONE[g][1] } : { testo: g ? 'precisione: ' + g : 'precisione non indicata', livello: g ? 'warn' : 'ok' }; }
@@ -154,7 +154,23 @@
     }
     var g = await ors('geocodifica', { testo: indirizzo });
     if (!g) throw new Error('Indirizzo non trovato: "' + indirizzo + '". Correggerlo oppure inserire le coordinate.');
-    return { lat: g.lat, lng: g.lng, geocodifica: g.livello || '', etichetta: g.indirizzo };
+    var pos = { lat: g.lat, lng: g.lng, geocodifica: g.livello || '', etichetta: g.indirizzo };
+    return await controllaComune(pos, indirizzo);
+  }
+
+  /** Se il punto trovato è lontano dal comune indicato nell'indirizzo, usa il centro del comune e segnala. */
+  var cacheComuni = {};
+  var DISTANZA_MAX_COMUNE_KM = 25;
+  async function centroComune(comune) {
+    if (!(comune in cacheComuni)) cacheComuni[comune] = await ors('geocodifica', { testo: comune });
+    return cacheComuni[comune];
+  }
+  async function controllaComune(pos, indirizzo) {
+    var comune = C.comuneDaIndirizzo(indirizzo);
+    if (!comune || ['locality', 'localadmin', 'county', 'region', 'country', 'macrocounty', 'fuori_comune'].indexOf(pos.geocodifica) >= 0) return pos;
+    var c = await centroComune(comune);
+    if (!c || C.distanzaKm(pos, c) <= DISTANZA_MAX_COMUNE_KM) return pos;
+    return { lat: c.lat, lng: c.lng, geocodifica: 'fuori_comune', etichetta: c.indirizzo + ' (il punto trovato per la via era a ' + Math.round(C.distanzaKm(pos, c)) + ' km: usato il centro del comune)' };
   }
 
   /* ============================ distanze ============================ */
@@ -437,6 +453,30 @@
       $('prog').textContent = '';
       msg(es.errori.length ? es.calcolate + ' distanze calcolate, ' + es.errori.length + ' non trovate (elenco sotto il riepilogo).' : 'Distanze aggiornate (' + es.calcolate + ' nuove).', es.errori.length ? 'warn' : 'ok');
     }, 'Calcolo distanze in corso…').catch(function () { $('prog').textContent = ''; });
+  });
+
+  $('btnVerificaPos').addEventListener('click', function () {
+    esegui(async function () {
+      var daControllare = S.pv.filter(function (p) { return ['manuale', 'locality', 'localadmin', 'county', 'region', 'country', 'macrocounty', 'fuori_comune'].indexOf(p.geocodifica) < 0; });
+      var corretti = [], n = 0;
+      for (var i = 0; i < daControllare.length; i++) {
+        var p = daControllare[i], comune = C.comuneDaIndirizzo(p.indirizzo);
+        if (!comune) continue;
+        $('prog').textContent = 'Verifica posizioni: ' + (i + 1) + ' di ' + daControllare.length;
+        if (!(comune in cacheComuni) && n++ > 0) await pausa(PAUSA_GEOCODIFICA_MS);
+        var nuova = await controllaComune({ lat: p.lat, lng: p.lng, geocodifica: p.geocodifica }, p.indirizzo);
+        if (nuova.geocodifica === 'fuori_comune') {
+          corretti.push(p.codice + ' ' + p.nome + ': ' + nuova.etichetta);
+          p.lat = nuova.lat; p.lng = nuova.lng; p.geocodifica = 'fuori_comune';
+          await upsert('punti_vendita', [aDbPV(p)], 'codice');
+          await elimina('distanze', 'pv', [p.codice]);
+          S.dist = S.dist.filter(function (d) { return d.pv !== p.codice; });
+        }
+      }
+      $('prog').textContent = '';
+      disegnaRiepilogo();
+      msg(corretti.length ? corretti.length + ' posizioni corrette (poi premere "Aggiorna distanze"):<br>' + corretti.map(esc).join('<br>') : 'Nessuna posizione fuori dal proprio comune (' + daControllare.length + ' controllate).', corretti.length ? 'warn' : 'ok');
+    }, 'Verifica delle posizioni…').catch(function () { $('prog').textContent = ''; });
   });
 
   function datiEstrazione() { return C.estrazione(S.P, S.sedi, C.tabella(S.P, S.sedi, S.pv, S.dist)); }

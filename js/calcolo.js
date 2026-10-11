@@ -256,9 +256,25 @@
   /** Toglie dall'indirizzo le sigle che confondono la geocodifica (S.N., S.N.C., N.C., "ANG. via secondaria"). */
   function pulisciIndirizzo(s) {
     return String(s || '').replace(/\s+/g, ' ').trim()
-      .replace(/\s+ANG\.?\s.*$/i, '')
+      .replace(/\s+ANG(\.|\s).*$/i, '')
       .replace(/(^|[\s,])(S\.\s?N\.\s?C\.?|S\.\s?N\.?|N\.\s?C\.?|SNC|SN)(?=$|[\s,])/gi, '$1')
       .replace(/[\s,]+$/, '').replace(/,\s*,/g, ',').replace(/\s+/g, ' ').trim();
+  }
+
+  /** Distanza in linea d'aria (km). */
+  function distanzaKm(a, b) {
+    var R = 6371, t = Math.PI / 180;
+    var dl = (b.lat - a.lat) * t, dg = (b.lng - a.lng) * t;
+    var h = Math.sin(dl / 2) * Math.sin(dl / 2) + Math.cos(a.lat * t) * Math.cos(b.lat * t) * Math.sin(dg / 2) * Math.sin(dg / 2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  /** Comune dall'indirizzo composto: "VIA X 1, CANOSA DI PUGLIA (BT)" -> "CANOSA DI PUGLIA (BT)"; null se non c'è una virgola. */
+  function comuneDaIndirizzo(ind) {
+    var parti = String(ind || '').split(',');
+    if (parti.length < 2) return null;
+    var c = parti[parti.length - 1].replace(/\b\d{5}\b/, '').trim();
+    return c && /[A-Za-zÀ-ÿ]/.test(c) && !/^\d/.test(c) ? c : null;
   }
 
   function normReparto(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim() || 'unico'; }
@@ -422,6 +438,6 @@
     chiaveCoord: chiaveCoord, metriche: metriche, delta: delta, weiszfeld: weiszfeld, pesiOttimo: pesiOttimo,
     tabella: tabella, riepilogo: riepilogo, estrazione: estrazione, csv: csv, mappaColonne: mappaColonne,
     preparaImport: preparaImport, leggiCSV: leggiCSV, aBlocchi: aBlocchi, arr: arr,
-    volumePV: volumePV, volumi: volumi, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
+    volumePV: volumePV, volumi: volumi, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
   };
 });

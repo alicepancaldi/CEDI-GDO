@@ -299,7 +299,7 @@ test('limite ORS raggiunto: l\'app aspetta e riprova da sola', async () => {
   const row = p.d.querySelectorAll('#sediForm .sede')[0];
   row.querySelector('.sInd').value = 'Via Emilia 1, Bologna'; row.querySelector('.sSalva').click();
   await p.attendiMsg(/salvata/);
-  assert.strictEqual(p.ors.st.geocode, 1);
+  assert.strictEqual(p.ors.st.geocode, 2, 'indirizzo + controllo del comune (dopo il 429 riprovato)');
   assert.deepStrictEqual(p.errori, []);
 });
 
@@ -370,3 +370,26 @@ test('carichi giornalieri: import formato Megamark, fattori colli→pallet, viag
 });
 
 function fmtIt(n) { return Number(n).toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+
+test('posizione fuori dal comune indicato: si usa il centro del comune; verifica posizioni corregge i PV già salvati', async () => {
+  const p = apriPagina({ sessione: { user: { email: 'alice@esempio.it' }, access_token: 'jwt-valido' } });
+  const { $, d, w, S } = p;
+  await p.finche(() => p.libero() && $('pEuroKm').value, 'avvio');
+  p.set('pvCodice', '647507'); p.set('pvIndirizzo', 'Via San Nicola 7, Torre a Mare (BA)'); p.set('pvPallet', '10'); p.set('pvConsegne', '6');
+  $('btnSalvaPV').click(); await p.attendiMsg(/647507 salvato/);
+  const pv = S.db.punti_vendita.find(x => x.codice === '647507');
+  assert.deepStrictEqual([pv.lat, pv.lng, pv.geocodifica], [41.0866, 16.9967, 'fuori_comune']);
+  assert.match($('msg').textContent, /usato il centro del comune/);
+  // PV importato prima della correzione, con la posizione sbagliata
+  S.db.punti_vendita.push({ codice: '999', nome: 'X', indirizzo: 'Via San Nicola 7, Torre a Mare (BA)', lat: 40.9044, lng: 8.872, pallet_settimana: 5, consegne_settimana: 3, geocodifica: 'address' });
+  S.db.distanze.push({ sede: 'ATTUALE', pv: '999', km: 1000, minuti: 900, chiave: 'x' });
+  $('btnRicarica').click(); await p.attendiMsg(/Dati aggiornati/);
+  p.tab('riep'); $('btnVerificaPos').click();
+  await p.attendiMsg(/1 posizioni corrette/);
+  assert.match($('msg').textContent, /999 X/);
+  const c = S.db.punti_vendita.find(x => x.codice === '999');
+  assert.deepStrictEqual([c.lat, c.geocodifica], [41.0866, 'fuori_comune']);
+  assert.ok(!S.db.distanze.some(x => x.pv === '999'), 'distanze vecchie eliminate');
+  $('btnVerificaPos').click(); await p.attendiMsg(/Nessuna posizione fuori/);
+  assert.deepStrictEqual(p.errori, []);
+});
