@@ -53,3 +53,5 @@ tr.sep td { background:#fafbfc; color:var(--mut); font-size:12px; }
 .t-u { font-size:12px; font-weight:400; color:var(--mut); }
 .t-d { font-size:14px; margin:4px 0; }
 .t-sub { font-size:12px; color:var(--mut); }
+.mappe { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+@media (max-width:860px) { .mappe { grid-template-columns:1fr; } }

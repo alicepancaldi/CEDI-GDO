@@ -89,7 +89,14 @@
   }
 
   /** Mappa schematica: clienti (cerchi ∝ viaggi) e sedi, in proiezione locale. */
-  function mappa(punti, sedi, titolo) {
+  function mappa(punti, sedi, titolo, zoomKm) {
+    if (zoomKm) { // riquadro attorno alle sedi: solo i clienti vicini
+      var la = sedi.map(function (q) { return q.lat; }), lo = sedi.map(function (q) { return q.lng; });
+      var dLat = zoomKm / 110.574, dLng = zoomKm / (111.320 * Math.cos(la[0] * Math.PI / 180));
+      var b = { a1: Math.min.apply(null, la) - dLat, a2: Math.max.apply(null, la) + dLat, o1: Math.min.apply(null, lo) - dLng, o2: Math.max.apply(null, lo) + dLng };
+      punti = punti.filter(function (q) { return q.lat >= b.a1 && q.lat <= b.a2 && q.lng >= b.o1 && q.lng <= b.o2; });
+      punti = punti.concat([{ lat: b.a1, lng: b.o1, viaggi: 0, codice: '', nome: '', cornice: true }, { lat: b.a2, lng: b.o2, viaggi: 0, codice: '', nome: '', cornice: true }]);
+    }
     var tutti = punti.concat(sedi);
     if (!tutti.length) return '';
     var lat0 = tutti.reduce(function (s, p) { return s + p.lat; }, 0) / tutti.length, kx = Math.cos(lat0 * Math.PI / 180);
@@ -98,7 +105,7 @@
     var w = 720, pad = 24, sc = Math.min((w - 2 * pad) / (x2 - x1 || 1), 560 / (y2 - y1 || 1)), h = (y2 - y1) * sc + 2 * pad;
     var X = function (p) { return pad + (p.lng * kx - x1) * sc; }, Y = function (p) { return pad + (y2 - p.lat) * sc; };
     var vmax = Math.max.apply(null, punti.map(function (p) { return p.viaggi; }).concat([1])), c = '';
-    punti.slice().sort(function (a, b) { return b.viaggi - a.viaggi; }).forEach(function (p) {
+    punti.filter(function (p) { return !p.cornice; }).sort(function (a, b) { return b.viaggi - a.viaggi; }).forEach(function (p) {
       c += '<circle cx="' + X(p).toFixed(1) + '" cy="' + Y(p).toFixed(1) + '" r="' + (2 + 9 * Math.sqrt(p.viaggi / vmax)).toFixed(1) + '" fill="' + GRIGIO + '" fill-opacity="0.45" stroke="#fff" stroke-width="0.5"><title>' +
         esc(p.codice + ' ' + p.nome + ': ' + p.viaggi + ' viaggi') + '</title></circle>';
     });
@@ -108,7 +115,7 @@
       var dx = s.codice === 'OPZ2' ? -10 : 10, anchor = s.codice === 'OPZ2' ? 'end' : 'start', dy = [-10, 4, 18, 32, 46][i] || 4;
       c += testo(x + dx, y + dy, s.nome, { size: 12, fill: colore(s.codice), weight: 600, anchor: anchor });
     });
-    return svg(w, Math.round(h), c, titolo) + '<p class="muted">Cerchi grigi: clienti, area proporzionale ai viaggi nel periodo. Rombi: sedi. Proiezione semplificata, senza strade.</p>';
+    return svg(w, Math.round(h), c, titolo);
   }
 
   function tessere(sedi) {
@@ -136,7 +143,9 @@
     if (D.mesi.length > 1) h += '<div class="card"><h2>Stabilità mese per mese</h2>' + lineeMensili(D.mesi, D.sedi, 'Differenza percentuale mensile') +
       '<p class="muted">Differenza % del costo del mese (con gasolio) rispetto all\'Interporto: linee piatte = risultato stabile nei mesi.</p></div>';
     h += '<div class="card"><h2>Adeguamento gasolio</h2>' + barreGasolio(D.mesi, D.franchigia, 'Adeguamento gasolio mensile') + '</div>';
-    h += '<div class="card"><h2>Dove sono clienti e sedi</h2>' + mappa(D.punti, D.sediPos, 'Mappa schematica') + '</div>';
+    h += '<div class="card"><h2>Dove sono clienti e sedi</h2><div class="mappe"><div>' + mappa(D.punti, D.sediPos, 'Mappa schematica') + '</div><div><h3>Area di Bari</h3>' +
+      mappa(D.punti, D.sediPos, 'Mappa ingrandita area di Bari', 10) + '</div></div>' +
+      '<p class="muted">Cerchi grigi: clienti, area proporzionale ai viaggi nel periodo. Rombi: sedi. Proiezione semplificata, senza strade.</p></div>';
     el.innerHTML = h;
   }
 

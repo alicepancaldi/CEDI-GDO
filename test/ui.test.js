@@ -593,7 +593,7 @@ test('dashboard: più mesi, prezzo mancante, mappa', () => {
   const el = dom.window.document.getElementById('d');
   dom.window.Dashboard.disegna(el, D);
   assert.strictEqual(el.querySelectorAll('.tessera').length, 4);
-  assert.strictEqual(el.querySelectorAll('svg').length, 5);
+  assert.strictEqual(el.querySelectorAll('svg').length, 6);
   assert.match(el.textContent, /Prezzo del gasolio mancante per: lug 26/);
   assert.match(el.textContent, /Cellamare −1,2%/);
   assert.ok(!/NaN|undefined/.test(el.innerHTML));
