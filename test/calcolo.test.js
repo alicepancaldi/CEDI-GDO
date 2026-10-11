@@ -365,17 +365,24 @@ test('perimetro: i PV in Campania restano fuori da import e calcoli', () => {
   ['BA', 'BT', 'TA', 'KR', '', null].forEach(p => assert.ok(!C.fuoriPerimetro(p), String(p)));
   assert.ok(C.pvFuoriPerimetro({ indirizzo: "VIA CONSORTILE, 81030 GRICIGNANO D'AVERSA (CE)" }));
   assert.ok(!C.pvFuoriPerimetro({ indirizzo: 'Via Bari 1, 70124 Bari (BA)' }));
+  // provincia sbagliata nel gestionale: decide il CAP
+  assert.ok(C.pvFuoriPerimetro({ indirizzo: "VIA CONSORTILE ZONA IND. ASI0, 81030 GRICIGNANO D'AVERSA (BT)" }));
+  assert.strictEqual(C.capDaIndirizzo('VIA ALDO MORO, 87, 88038 FILIPPA DI MESORACA (KR)'), '88038');
+  assert.ok(!C.pvFuoriPerimetro({ indirizzo: 'VIA ALDO MORO, 87, 88038 FILIPPA DI MESORACA (KR)' }));
+  assert.ok(!C.pvFuoriPerimetro({ indirizzo: 'Via Roma 84, Bari (BA)' }));
+  assert.ok(C.fuoriPerimetro('BT', '81030')); assert.ok(!C.fuoriPerimetro('BT', '76121'));
   const righe = [
     ['numvg', 'dtv', 'codcli', 'giro', 'tipomezzo', 'numito', 'rs', 'ind_bc', 'cap_bc', 'città_bc', 'prov_bc'],
     ['V1', '2026-07-01', '100', 'G1', 'MOT23', 2, 'PV Bari', 'Via A 1', '70100', 'BARI', 'BA'],
     ['V1', '2026-07-01', '36051', 'G1', 'MOT23', 3, 'SA.FO', 'Via C', '81030', 'GRICIGNANO', 'CE'],
-    ['V2', '2026-07-02', '36051', 'G2', 'BIL33', 9, 'SA.FO', 'Via C', '81030', 'GRICIGNANO', 'CE']
+    ['V2', '2026-07-02', '36051', 'G2', 'BIL33', 9, 'SA.FO', 'Via C', '81030', 'GRICIGNANO', 'CE'],
+    ['V3', '2026-07-02', '36051', 'G3', 'BIL33', 9, 'SA.FO', 'Via C', '81030', 'GRICIGNANO', 'BT']
   ];
   const r = C.preparaImport(righe);
   assert.strictEqual(r.tipo, 'viaggi');
   assert.deepStrictEqual(r.viaggi.map(v => [v.id, v.clienti.map(c => c.pv)]), [['V1', ['100']]]);
   assert.deepStrictEqual(r.validi.map(v => v.codice), ['100']);
-  assert.deepStrictEqual(r.fuoriPerimetro, { clienti: ['36051'], righe: 2 });
+  assert.deepStrictEqual(r.fuoriPerimetro, { clienti: ['36051'], righe: 3 });
   assert.strictEqual(r.al, '2026-07-02'); // il periodo resta quello del file
   const g = C.preparaImport([['codice', 'nome', 'indirizzo', 'città', 'provincia', 'reparto', '01/07/2026'], ['1', 'A', 'Via X', 'Bari', 'BA', 'O', '10'], ['2', 'B', 'Via Y', 'Napoli', 'NA', 'O', '20']]);
   assert.strictEqual(g.tipo, 'giornaliero');

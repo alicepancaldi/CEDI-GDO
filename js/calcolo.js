@@ -405,8 +405,13 @@
 
   // Perimetro dello studio: i punti vendita in Campania restano sempre fuori (import, calcoli, estrazioni).
   var PROVINCE_FUORI_PERIMETRO = ['AV', 'BN', 'CE', 'NA', 'SA'];
-  function fuoriPerimetro(prov) { return PROVINCE_FUORI_PERIMETRO.indexOf(String(prov || '').trim().toUpperCase()) >= 0; }
-  function pvFuoriPerimetro(pv) { return fuoriPerimetro(provinciaDaIndirizzo(pv && pv.indirizzo)); }
+  // CAP della Campania: 80xxx (NA), 81xxx (CE), 82xxx (BN), 83xxx (AV), 84xxx (SA). Il CAP è controllato anche quando la
+  // provincia del gestionale è sbagliata (es. Gricignano d'Aversa registrato come BT).
+  function fuoriPerimetro(prov, cap) {
+    return PROVINCE_FUORI_PERIMETRO.indexOf(String(prov || '').trim().toUpperCase()) >= 0 || /^8[0-4]\d{3}$/.test(String(cap || '').trim());
+  }
+  function capDaIndirizzo(ind) { var m = String(ind || '').match(/(?:^|[,\s])(\d{5})\s+[^,\d][^,]*$/); return m ? m[1] : null; }
+  function pvFuoriPerimetro(pv) { var ind = pv && pv.indirizzo; return fuoriPerimetro(provinciaDaIndirizzo(ind), capDaIndirizzo(ind)); }
 
   function colonneViaggi(intestazione) {
     var norm = intestazione.map(normTitolo), out = {};
@@ -434,7 +439,7 @@
       var data = leggiData(r[col.data]);
       if (!data) { scartati.push({ riga: riga, codice: pv, motivo: 'data viaggio non valida "' + testo(r, 'data') + '"' }); return; }
       date[data] = true;
-      if (fuoriPerimetro(testo(r, 'provincia'))) { fuori[pv] = true; righeFuori++; return; }
+      if (fuoriPerimetro(testo(r, 'provincia'), codiceDa(testo(r, 'cap')))) { fuori[pv] = true; righeFuori++; return; }
       var v = viaggi[id];
       if (!v) {
         v = viaggi[id] = { id: id, data: data, giro: testo(r, 'giro'), vettore: testo(r, 'vettore').replace(/\s+/g, ' '), mezzo: testo(r, 'mezzo'),
@@ -835,6 +840,6 @@
     ottimoViaggi: ottimoViaggi, preparaTariffe: preparaTariffe, righeDaExcel: righeDaExcel, tortuosita: tortuosita, estrazioneViaggi: estrazioneViaggi, periodoViaggi: periodoViaggi, REPARTI_CODICE: REPARTI_CODICE, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto,
     GASOLIO_DEF: GASOLIO_DEF, parametriGasolio: parametriGasolio, meseDi: meseDi, adeguamentoGasolio: adeguamentoGasolio, classeMezzo: classeMezzo,
     gasolioViaggi: gasolioViaggi, estrazioneGasolio: estrazioneGasolio,
-    PROVINCE_FUORI_PERIMETRO: PROVINCE_FUORI_PERIMETRO, fuoriPerimetro: fuoriPerimetro, pvFuoriPerimetro: pvFuoriPerimetro
+    PROVINCE_FUORI_PERIMETRO: PROVINCE_FUORI_PERIMETRO, fuoriPerimetro: fuoriPerimetro, pvFuoriPerimetro: pvFuoriPerimetro, capDaIndirizzo: capDaIndirizzo
   };
 });
