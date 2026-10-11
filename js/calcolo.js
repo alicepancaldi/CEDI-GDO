@@ -403,6 +403,11 @@
   };
   var REPARTI_CODICE = { O: 'ortofrutta', F: 'salumi/formaggi', A: 'carne', S: 'surgelati' };
 
+  // Perimetro dello studio: i punti vendita in Campania restano sempre fuori (import, calcoli, estrazioni).
+  var PROVINCE_FUORI_PERIMETRO = ['AV', 'BN', 'CE', 'NA', 'SA'];
+  function fuoriPerimetro(prov) { return PROVINCE_FUORI_PERIMETRO.indexOf(String(prov || '').trim().toUpperCase()) >= 0; }
+  function pvFuoriPerimetro(pv) { return fuoriPerimetro(provinciaDaIndirizzo(pv && pv.indirizzo)); }
+
   function colonneViaggi(intestazione) {
     var norm = intestazione.map(normTitolo), out = {};
     Object.keys(ALIAS_VIAGGI).forEach(function (campo) {
@@ -417,7 +422,7 @@
 
   function preparaViaggi(righe, iHdr) {
     var col = colonneViaggi(righe[iHdr]);
-    var viaggi = {}, ordine = [], anag = {}, ordineAnag = [], scartati = [], avvisi = [], date = {};
+    var viaggi = {}, ordine = [], anag = {}, ordineAnag = [], scartati = [], avvisi = [], date = {}, fuori = {}, righeFuori = 0;
     var testo = function (r, c) { return col[c] === undefined ? '' : String(r[col[c]] === undefined || r[col[c]] === null ? '' : r[col[c]]).trim(); };
     var numero = function (r, c) { var t = testo(r, c); if (t === '') return null; try { return num(t, c); } catch (e) { return null; } };
     var codiceDa = function (t) { return /^\d+\.0+$/.test(t) ? t.replace(/\.0+$/, '') : t; };
@@ -429,6 +434,7 @@
       var data = leggiData(r[col.data]);
       if (!data) { scartati.push({ riga: riga, codice: pv, motivo: 'data viaggio non valida "' + testo(r, 'data') + '"' }); return; }
       date[data] = true;
+      if (fuoriPerimetro(testo(r, 'provincia'))) { fuori[pv] = true; righeFuori++; return; }
       var v = viaggi[id];
       if (!v) {
         v = viaggi[id] = { id: id, data: data, giro: testo(r, 'giro'), vettore: testo(r, 'vettore').replace(/\s+/g, ' '), mezzo: testo(r, 'mezzo'),
@@ -453,7 +459,18 @@
     });
     var elencoDate = Object.keys(date).sort();
     return { tipo: 'viaggi', viaggi: lista, validi: ordineAnag.map(function (k) { return anag[k]; }), scartati: scartati, avvisi: avvisi, colonne: col,
-      date: elencoDate, dal: elencoDate[0] || null, al: elencoDate[elencoDate.length - 1] || null };
+      date: elencoDate, dal: elencoDate[0] || null, al: elencoDate[elencoDate.length - 1] || null,
+      fuoriPerimetro: { clienti: Object.keys(fuori), righe: righeFuori } };
+  }
+
+  /** Esclude dal risultato di un import (giornaliero o anagrafica) i punti vendita fuori perimetro. */
+  function togliFuoriPerimetro(res) {
+    var fuori = {};
+    res.validi = res.validi.filter(function (v) { if (pvFuoriPerimetro(v)) { fuori[v.codice] = true; return false; } return true; });
+    var righe = 0;
+    if (res.carichi) res.carichi = res.carichi.filter(function (c) { if (fuori[c.pv]) { righe++; return false; } return true; });
+    res.fuoriPerimetro = { clienti: Object.keys(fuori), righe: righe };
+    return res;
   }
 
   /* ---------- tariffario ---------- */
@@ -748,7 +765,7 @@
     righe[iHdr].forEach(function (h, i) { var d = leggiData(h); if (d) colonneData.push({ indice: i, data: d }); });
     if (col.codice !== undefined && (colonneData.length || (col.data !== undefined && col.colli !== undefined))) {
       if (col.indirizzo === undefined && col.comune === undefined) throw new Error('Colonne non riconosciute: indirizzo. Intestazioni trovate: ' + righe[iHdr].join(' | '));
-      return preparaGiornaliero(righe, iHdr, col, colonneData);
+      return togliFuoriPerimetro(preparaGiornaliero(righe, iHdr, col, colonneData));
     }
     var mancano = ['codice', 'pallet', 'consegne'].filter(function (c) { return col[c] === undefined; });
     if (col.indirizzo === undefined && col.comune === undefined && col.lat === undefined && col.coordinate === undefined) mancano.push('indirizzo');
@@ -778,7 +795,7 @@
         scartati.push({ riga: riga, codice: v('codice'), motivo: e.message });
       }
     });
-    return { tipo: 'anagrafica', validi: validi, scartati: scartati, avvisi: [], colonne: col };
+    return togliFuoriPerimetro({ tipo: 'anagrafica', validi: validi, scartati: scartati, avvisi: [], colonne: col });
   }
 
   /** CSV -> array di righe. Separatore rilevato (; , tab), virgolette gestite, BOM rimosso. */
@@ -817,6 +834,7 @@
     volumePV: volumePV, volumi: volumi, costoViaggio: costoViaggio, normTesto: normTesto, comuneDaEtichetta: comuneDaEtichetta, ricalcolaViaggi: ricalcolaViaggi, riepilogoViaggi: riepilogoViaggi,
     ottimoViaggi: ottimoViaggi, preparaTariffe: preparaTariffe, righeDaExcel: righeDaExcel, tortuosita: tortuosita, estrazioneViaggi: estrazioneViaggi, periodoViaggi: periodoViaggi, REPARTI_CODICE: REPARTI_CODICE, distanzaKm: distanzaKm, comuneDaIndirizzo: comuneDaIndirizzo, provinciaDaIndirizzo: provinciaDaIndirizzo, provinciaDaEtichetta: provinciaDaEtichetta, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto,
     GASOLIO_DEF: GASOLIO_DEF, parametriGasolio: parametriGasolio, meseDi: meseDi, adeguamentoGasolio: adeguamentoGasolio, classeMezzo: classeMezzo,
-    gasolioViaggi: gasolioViaggi, estrazioneGasolio: estrazioneGasolio
+    gasolioViaggi: gasolioViaggi, estrazioneGasolio: estrazioneGasolio,
+    PROVINCE_FUORI_PERIMETRO: PROVINCE_FUORI_PERIMETRO, fuoriPerimetro: fuoriPerimetro, pvFuoriPerimetro: pvFuoriPerimetro
   };
 });

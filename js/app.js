@@ -131,20 +131,28 @@
     });
     C.CODICI_SEDI.forEach(function (c) { if (!S.sedi[c]) throw new Error('Sede ' + c + ' mancante: eseguire supabase/schema.sql.'); });
     S.pv = r[2].map(daDbPV); ordinaPV();
-    S.dist = r[3].map(function (d) { return { sede: d.sede, pv: String(d.pv), km: Number(d.km), minuti: Number(d.minuti), chiave: d.chiave }; });
-    S.carichi = r[4].map(function (c) { return { pv: String(c.pv), data: String(c.data).slice(0, 10), reparto: c.reparto, colli: Number(c.colli) }; });
+    // perimetro: i PV in Campania restano fuori da tutti i calcoli e le estrazioni (anche se presenti nel database)
+    var fuori = {};
+    S.fuoriPerimetro = S.pv.filter(function (p) { if (C.pvFuoriPerimetro(p)) { fuori[p.codice] = true; return true; } return false; });
+    S.pv = S.pv.filter(function (p) { return !fuori[p.codice]; });
+    S.dist = r[3].map(function (d) { return { sede: d.sede, pv: String(d.pv), km: Number(d.km), minuti: Number(d.minuti), chiave: d.chiave }; }).filter(function (d) { return !fuori[d.pv]; });
+    S.carichi = r[4].map(function (c) { return { pv: String(c.pv), data: String(c.data).slice(0, 10), reparto: c.reparto, colli: Number(c.colli) }; }).filter(function (c) { return !fuori[c.pv]; });
     S.reparti = {};
     r[5].forEach(function (x) { S.reparti[x.reparto] = x.colli_per_pallet == null ? null : Number(x.colli_per_pallet); });
     S.carichi.forEach(function (c) { if (!(c.reparto in S.reparti)) S.reparti[c.reparto] = null; });
     ricalcolaVolumi();
     var perViaggio = {};
+    S.viaggiConFuori = {};
     r[7].forEach(function (c) {
+      if (fuori[String(c.pv)]) { S.viaggiConFuori[c.viaggio] = true; return; }
       (perViaggio[c.viaggio] = perViaggio[c.viaggio] || []).push({ pv: String(c.pv), occ: Number(c.occ), colli: Number(c.colli), kmZona: c.km_zona == null ? null : Number(c.km_zona) });
     });
     S.viaggi = r[6].map(function (v) {
       return { id: v.id, data: String(v.data).slice(0, 10), giro: v.giro || '', vettore: v.vettore || '', mezzo: v.mezzo || '',
         capPallet: v.cap_pallet == null ? null : Number(v.cap_pallet), capRoll: v.cap_roll == null ? null : Number(v.cap_roll), clienti: perViaggio[v.id] || [] };
-    }).filter(function (v) { return v.clienti.length; });
+    });
+    S.viaggiFuori = S.viaggi.filter(function (v) { return !v.clienti.length; }).length;
+    S.viaggi = S.viaggi.filter(function (v) { return v.clienti.length; });
     S.tariffe = r[8].map(function (t) {
       return { id: t.id, anno: Number(t.anno), mezzo: t.mezzo || '*', km_da: Number(t.km_da), km_a: t.km_a == null ? null : Number(t.km_a), euro_km: Number(t.euro_km), euro_fisso: Number(t.euro_fisso) };
     });
@@ -476,6 +484,7 @@
       var codice = $('pvCodice').value.trim(), indirizzo = $('pvIndirizzo').value.trim().replace(/\s+/g, ' ');
       if (!codice) throw new Error('Inserire il codice del punto vendita.');
       if (!indirizzo) throw new Error('Inserire l\'indirizzo del punto vendita.');
+      if (C.pvFuoriPerimetro({ indirizzo: indirizzo })) throw new Error('Punto vendita in Campania: è fuori dal perimetro dello studio e non viene inserito.');
       var esistente = trovaPV(codice);
       var conCarichi = !!(esistente && esistente.haCarichi);
       var pTxt = $('pvPallet').value.trim(), cTxt = $('pvConsegne').value.trim();
@@ -598,6 +607,12 @@
     $('confronto').innerHTML = h;
   }
 
+  function notaPerimetro() {
+    var n = (S.fuoriPerimetro || []).length;
+    if (!n && !S.viaggiFuori) return '';
+    return '<br>Fuori perimetro (Campania): ' + n + ' punti vendita esclusi da calcoli ed estrazioni' + (S.viaggiFuori ? ', ' + S.viaggiFuori + ' viaggi che servivano solo loro' : '') + '.';
+  }
+
   function disegnaRiepilogoViaggi() {
     var R = ricalcoloViaggi(), ries = C.riepilogoViaggi(S.sedi, R), per = R.periodo;
     if (!ries.length) { $('riepilogo').innerHTML = '<span class="muted">Nessuna sede configurata.</span>'; return; }
@@ -606,7 +621,7 @@
     var anni = anniTariffe();
     var h = '<p class="muted">Viaggi reali: ' + S.viaggi.length + ' viaggi dal ' + esc(per.dal) + ' al ' + esc(per.al) + ' (' + per.giorni + ' giorni), ' + Object.keys(nClienti).length +
       ' clienti. Km di ogni viaggio = ' + (S.P.km_fatturati === 'AR' ? 'andata e ritorno' : 'sola andata') + ' fino al cliente più lontano del giro. Costo/anno = periodo × ' + fmt(per.fattoreAnno, 2) + '.<br>' +
-      (anni.length ? 'Tariffario ' + annoTariffaInUso() + '.' : '<span class="avviso">Tariffario non inserito: costi calcolati con ' + fmt(S.P.euro_km, 2) + ' €/km dei parametri.</span>') + '</p>';
+      (anni.length ? 'Tariffario ' + annoTariffaInUso() + '.' : '<span class="avviso">Tariffario non inserito: costi calcolati con ' + fmt(S.P.euro_km, 2) + ' €/km dei parametri.</span>') + notaPerimetro() + '</p>';
     if (mancanti) h += '<div class="alert warn">' + mancanti + ' calcoli di viaggio non possibili per distanze mancanti: i totali non sono ancora confrontabili. Premere "Aggiorna distanze".</div>';
     h += '<div class="scroll"><table><thead><tr><th>Sede</th><th>Viaggi</th><th>Km fatturati nel periodo</th><th>Costo nel periodo</th><th>Costo / anno</th>' +
       '<th>Δ costo / anno vs attuale</th><th>Δ %</th><th>Δ km nel periodo</th><th>Sopra l\'ottimo</th></tr></thead><tbody>' +
@@ -906,6 +921,10 @@
           }).join('') +
           '</tbody></table></div>' + (prep.validi.length > 10 ? '<p class="muted">… e altre ' + (prep.validi.length - 10) + ' righe.</p>' : '') +
           '<button class="btn" id="btnConfermaImport">Importa ' + prep.validi.length + ' punti vendita</button>';
+      }
+      if (prep.fuoriPerimetro && prep.fuoriPerimetro.clienti.length) {
+        h += '<p class="muted">Esclusi perché fuori perimetro (Campania): ' + prep.fuoriPerimetro.clienti.length + ' punti vendita (' + prep.fuoriPerimetro.clienti.map(esc).join(', ') + ')' +
+          (prep.fuoriPerimetro.righe ? ', ' + prep.fuoriPerimetro.righe + ' righe' : '') + '.</p>';
       }
       var segn = prep.scartati.concat(prep.avvisi || []);
       prep.scartati = segn;

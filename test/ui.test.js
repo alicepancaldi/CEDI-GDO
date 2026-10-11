@@ -540,3 +540,24 @@ test('database senza la tabella gasolio (migrazione 4 non ancora eseguita): l\'a
   p.$('btnGasolio').click(); await p.attendiMsg(/Versione 4/);
   assert.deepStrictEqual(p.errori, []);
 });
+
+test('perimetro: PV in Campania già nel database esclusi da calcoli, viaggi e maschera', async () => {
+  const supa = creaSupabaseFinto(caricaFunzioneOrs(creaOrsFinto().fetch), { sessione: { user: { email: 'a@b.it' }, access_token: 'jwt-valido' } });
+  const pv = (codice, indirizzo, lat, lng) => ({ codice, nome: 'PV ' + codice, indirizzo, lat, lng, pallet_settimana: null, consegne_settimana: null, geocodifica: 'address' });
+  supa.db.punti_vendita.push(pv('100', 'Via Emilia 1, 40100 Bologna (BO)', 44.4949, 11.3426), pv('36051', "Via Consortile, 81030 Gricignano d'Aversa (CE)", 40.98, 14.23));
+  supa.db.viaggi.push({ id: 'V1', data: '2026-07-01', giro: '', vettore: '', mezzo: 'MOT23' }, { id: 'V2', data: '2026-07-02', giro: '', vettore: '', mezzo: 'MOT23' });
+  supa.db.viaggi_clienti.push({ viaggio: 'V1', pv: '100', occ: 1, colli: 10, km_zona: null }, { viaggio: 'V1', pv: '36051', occ: 1, colli: 10, km_zona: null }, { viaggio: 'V2', pv: '36051', occ: 5, colli: 50, km_zona: null });
+  Object.assign(supa.db.sedi[0], { indirizzo: 'Interporto, Bentivoglio', lat: 44.637, lng: 11.407, geocodifica: 'manuale' });
+  const p = apriPagina({ supa });
+  await p.finche(() => !p.$('tab-pv').hidden && p.libero() && p.$('pEuroKm').value === '1,30', 'dati caricati');
+  const st = p.w.__simulatore.stato;
+  assert.strictEqual(JSON.stringify(st.pv.map(x => x.codice)), '["100"]');
+  assert.strictEqual(JSON.stringify(st.viaggi.map(v => [v.id, v.clienti.map(c => c.pv)])), '[["V1",["100"]]]');
+  assert.strictEqual(st.viaggiFuori, 1);
+  p.tab('riep');
+  assert.match(p.$('riepilogo').textContent, /Fuori perimetro \(Campania\): 1 punti vendita esclusi da calcoli ed estrazioni, 1 viaggi/);
+  p.tab('pv'); p.set('pvCodice', '999'); p.set('pvIndirizzo', 'Via Roma 1, 80100 Napoli (NA)');
+  p.$('btnSalvaPV').click(); await p.attendiMsg(/fuori dal perimetro/);
+  assert.ok(!supa.db.punti_vendita.some(x => x.codice === '999'));
+  assert.deepStrictEqual(p.errori, []);
+});

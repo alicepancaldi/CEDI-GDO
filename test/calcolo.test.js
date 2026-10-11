@@ -359,3 +359,27 @@ test('gasolio e CO2 sui viaggi ricalcolati', () => {
   const e = C.estrazioneGasolio({ ATTUALE: { nome: 'Interporto' }, OPZ1: { nome: 'Cellamare' } }, g);
   assert.strictEqual(e.righe.length, 2); assert.strictEqual(e.righe[0].length, e.intestazione.length); assert.strictEqual(e.mesi.length, 2);
 });
+
+test('perimetro: i PV in Campania restano fuori da import e calcoli', () => {
+  ['NA', 'SA', 'AV', 'BN', 'CE', 'ce'].forEach(p => assert.ok(C.fuoriPerimetro(p), p));
+  ['BA', 'BT', 'TA', 'KR', '', null].forEach(p => assert.ok(!C.fuoriPerimetro(p), String(p)));
+  assert.ok(C.pvFuoriPerimetro({ indirizzo: "VIA CONSORTILE, 81030 GRICIGNANO D'AVERSA (CE)" }));
+  assert.ok(!C.pvFuoriPerimetro({ indirizzo: 'Via Bari 1, 70124 Bari (BA)' }));
+  const righe = [
+    ['numvg', 'dtv', 'codcli', 'giro', 'tipomezzo', 'numito', 'rs', 'ind_bc', 'cap_bc', 'città_bc', 'prov_bc'],
+    ['V1', '2026-07-01', '100', 'G1', 'MOT23', 2, 'PV Bari', 'Via A 1', '70100', 'BARI', 'BA'],
+    ['V1', '2026-07-01', '36051', 'G1', 'MOT23', 3, 'SA.FO', 'Via C', '81030', 'GRICIGNANO', 'CE'],
+    ['V2', '2026-07-02', '36051', 'G2', 'BIL33', 9, 'SA.FO', 'Via C', '81030', 'GRICIGNANO', 'CE']
+  ];
+  const r = C.preparaImport(righe);
+  assert.strictEqual(r.tipo, 'viaggi');
+  assert.deepStrictEqual(r.viaggi.map(v => [v.id, v.clienti.map(c => c.pv)]), [['V1', ['100']]]);
+  assert.deepStrictEqual(r.validi.map(v => v.codice), ['100']);
+  assert.deepStrictEqual(r.fuoriPerimetro, { clienti: ['36051'], righe: 2 });
+  assert.strictEqual(r.al, '2026-07-02'); // il periodo resta quello del file
+  const g = C.preparaImport([['codice', 'nome', 'indirizzo', 'città', 'provincia', 'reparto', '01/07/2026'], ['1', 'A', 'Via X', 'Bari', 'BA', 'O', '10'], ['2', 'B', 'Via Y', 'Napoli', 'NA', 'O', '20']]);
+  assert.strictEqual(g.tipo, 'giornaliero');
+  assert.deepStrictEqual(g.validi.map(v => v.codice), ['1']);
+  assert.ok(g.carichi.every(c => c.pv === '1'));
+  assert.deepStrictEqual(g.fuoriPerimetro.clienti, ['2']);
+});
