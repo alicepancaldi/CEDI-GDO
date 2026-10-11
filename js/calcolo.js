@@ -54,16 +54,31 @@
     return [sede.lat, sede.lng, pv.lat, pv.lng].map(function (x) { return Number(x).toFixed(6); }).join('|');
   }
 
+  /** Volumi del PV: da carichi giornalieri (se presenti) oppure da pallet e consegne a settimana. null = non calcolabili. */
+  function volumePV(pv, cap) {
+    if (pv.carico) {
+      var c = pv.carico, viaggi = 0, pallet = 0;
+      c.giorni.forEach(function (L) { if (L > 0) { viaggi += Math.ceil(L / cap - 1e-9); pallet += L; } });
+      return { viaggiSett: viaggi / c.settimane, palletSett: pallet / c.settimane, consegneSett: c.giorni.filter(function (L) { return L > 0; }).length / c.settimane };
+    }
+    if (pv.pallet > 0 && pv.consegne > 0) {
+      var palletConsegna = pv.pallet / pv.consegne;
+      return { viaggiSett: pv.consegne * Math.ceil(palletConsegna / cap - 1e-9), palletSett: pv.pallet, consegneSett: pv.consegne };
+    }
+    return null;
+  }
+
   function metriche(pv, sede, dist, P) {
     var cap = sede && sede.capacita > 0 ? sede.capacita : P.capacita_pallet;
-    var palletConsegna = pv.pallet / pv.consegne;
-    var viaggiConsegna = Math.ceil(palletConsegna / cap - 1e-9);
-    var viaggiSett = pv.consegne * viaggiConsegna;
+    var vol = volumePV(pv, cap);
+    if (!vol) return null;
+    var viaggiSett = vol.viaggiSett;
     var kmFattViaggio = dist.km * (P.km_fatturati === 'AR' ? 2 : 1);
     var costoViaggio = kmFattViaggio * P.euro_km + P.costo_fisso_viaggio;
     var costoSett = viaggiSett * costoViaggio;
     return {
       km: dist.km, minuti: dist.minuti, viaggiSett: viaggiSett, kmSett: viaggiSett * kmFattViaggio,
+      palletSett: vol.palletSett, consegneSett: vol.consegneSett,
       costoViaggio: costoViaggio, costoSett: costoSett, costoAnno: costoSett * P.settimane_anno
     };
   }
@@ -114,8 +129,8 @@
     var kmFatt = P.km_fatturati === 'AR' ? 2 : 1;
     return pvLista.filter(function (p) { return p.lat !== null && p.lat !== undefined; }).map(function (p) {
       var m = metriche(p, null, { km: 1, minuti: 0 }, P);
-      return { lat: p.lat, lng: p.lng, w: m.viaggiSett * kmFatt * P.euro_km };
-    });
+      return m ? { lat: p.lat, lng: p.lng, w: m.viaggiSett * kmFatt * P.euro_km } : null;
+    }).filter(Boolean);
   }
 
   /** Tabella completa: metriche per PV e sede, totali, distanze mancanti. */
@@ -125,7 +140,8 @@
     var attive = CODICI_SEDI.filter(function (c) { return sedi[c] && sedi[c].lat !== null && sedi[c].lat !== undefined; });
     var tot = {};
     attive.forEach(function (c) { tot[c] = { viaggiSett: 0, kmSett: 0, costoSett: 0, costoAnno: 0, mancanti: 0 }; });
-    var righe = pvLista.map(function (pv) {
+    var senzaVolumi = pvLista.filter(function (pv) { return !volumePV(pv, P.capacita_pallet); });
+    var righe = pvLista.filter(function (pv) { return senzaVolumi.indexOf(pv) < 0; }).map(function (pv) {
       var m = {};
       attive.forEach(function (c) {
         var d = mappa[c + '#' + pv.codice];
@@ -136,7 +152,7 @@
       });
       return { pv: pv, m: m };
     });
-    return { attive: attive, righe: righe, tot: tot };
+    return { attive: attive, righe: righe, tot: tot, senzaVolumi: senzaVolumi };
   }
 
   function riepilogo(P, sedi, t) {
@@ -192,12 +208,15 @@
   /* ---------- import punti vendita da tabella grezza ---------- */
 
   var ALIAS = {
-    codice: ['codice', 'cod', 'codice pv', 'codicepv', 'cod pv', 'id', 'pv', 'punto vendita', 'codice punto vendita', 'negozio', 'store'],
+    codice: ['codice', 'cod', 'codice pv', 'codicepv', 'cod pv', 'id', 'pv', 'punto vendita', 'codice punto vendita', 'negozio', 'store', 'codcli', 'cod cli', 'codice cliente', 'cliente'],
     nome: ['nome', 'descrizione', 'insegna', 'ragione sociale', 'denominazione', 'nome pv'],
     indirizzo: ['indirizzo', 'indirizzo completo', 'via', 'address'],
     cap: ['cap', 'c.a.p.', 'codice postale'],
     comune: ['comune', 'citta', 'città', 'localita', 'località', 'city'],
-    provincia: ['provincia', 'prov', 'pr', 'sigla provincia'],
+    provincia: ['provincia', 'prov', 'pr', 'sigla provincia', 'provincia ric'],
+    reparto: ['reparto', 'mag', 'magazzino', 'settore', 'famiglia'],
+    data: ['data', 'giorno', 'data consegna', 'data carico'],
+    colli: ['colli', 'n colli', 'numero colli', 'quantita', 'qta', 'qta colli'],
     pallet: ['pallet', 'pallet settimana', 'pallet/settimana', 'pallet sett', 'pallet_settimana', 'pallet a settimana', 'volume', 'volume pallet'],
     consegne: ['consegne', 'consegne settimana', 'consegne/settimana', 'consegne_settimana', 'frequenza', 'consegne a settimana', 'n consegne'],
     lat: ['lat', 'latitudine', 'latitude'],
@@ -222,11 +241,123 @@
     return out;
   }
 
-  /** Righe grezze (array di array, prima riga = intestazione) -> {validi, scartati, colonne}. */
+  /** Data da cella o intestazione: Date, "2026-03-02", "2026-03-02T00:00:00Z", "02/03/2026" -> "2026-03-02"; altrimenti null. */
+  function leggiData(v) {
+    if (v instanceof Date || (v && typeof v.toISOString === 'function')) return isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+    var s = String(v == null ? '' : v).trim(), m;
+    if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})(T.*)?$/))) return m[1] + '-' + m[2] + '-' + m[3];
+    if ((m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/))) {
+      var a = m[3].length === 2 ? '20' + m[3] : m[3];
+      return a + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+    }
+    return null;
+  }
+
+  /** Toglie dall'indirizzo le sigle che confondono la geocodifica (S.N., S.N.C., N.C., "ANG. via secondaria"). */
+  function pulisciIndirizzo(s) {
+    return String(s || '').replace(/\s+/g, ' ').trim()
+      .replace(/\s+ANG\.?\s.*$/i, '')
+      .replace(/(^|[\s,])(S\.\s?N\.\s?C\.?|S\.\s?N\.?|N\.\s?C\.?|SNC|SN)(?=$|[\s,])/gi, '$1')
+      .replace(/[\s,]+$/, '').replace(/,\s*,/g, ',').replace(/\s+/g, ' ').trim();
+  }
+
+  function normReparto(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim() || 'unico'; }
+
+  function componiIndirizzo(v) {
+    var indirizzo = pulisciIndirizzo(v('indirizzo'));
+    var extra = [v('cap'), v('comune'), v('provincia') ? '(' + v('provincia').toUpperCase() + ')' : ''].filter(Boolean).join(' ');
+    var com = v('comune'), cap = v('cap');
+    var giaPresente = (cap && indirizzo.indexOf(cap) >= 0) ||
+      (com && new RegExp(',\\s*(\\d{5}\\s+)?' + com.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(indirizzo));
+    if (extra && !giaPresente) indirizzo = indirizzo ? indirizzo + ', ' + extra : extra;
+    return indirizzo;
+  }
+
+  /**
+   * Carichi giornalieri (colli per reparto) -> volumi in pallet per PV.
+   * fattori: {reparto: colli per pallet}. Il periodo vale (giorni con dati) / (giorni lavorativi a settimana) settimane.
+   */
+  function volumi(carichi, fattori, giorniSettimana) {
+    var date = {}, perPV = {}, senzaFattore = {};
+    carichi.forEach(function (c) {
+      date[c.data] = true;
+      var f = fattori[c.reparto];
+      var p = perPV[c.pv] = perPV[c.pv] || { giorni: {}, incompleto: false };
+      if (!(f > 0)) { senzaFattore[c.reparto] = true; p.incompleto = true; return; }
+      p.giorni[c.data] = (p.giorni[c.data] || 0) + c.colli / f;
+    });
+    var elenco = Object.keys(date).sort();
+    var settimane = elenco.length / (giorniSettimana > 0 ? giorniSettimana : 6);
+    var out = {};
+    Object.keys(perPV).forEach(function (k) {
+      var p = perPV[k];
+      out[k] = p.incompleto ? null : { giorni: Object.keys(p.giorni).map(function (d) { return p.giorni[d]; }), settimane: settimane };
+    });
+    return { perPV: out, giorni: elenco.length, settimane: settimane, dal: elenco[0] || null, al: elenco[elenco.length - 1] || null, repartiSenzaFattore: Object.keys(senzaFattore).sort() };
+  }
+
+  /** Formato giornaliero: una riga per PV (e reparto) con colonne-data (largo) oppure colonne data + colli (lungo). */
+  function preparaGiornaliero(righe, iHdr, col, colonneData) {
+    var pv = {}, ordine = [], carichi = {}, scartati = [], avvisi = [];
+    righe.slice(iHdr + 1).forEach(function (r, k) {
+      var riga = iHdr + k + 2;
+      if (!r || r.every(function (c) { return String(c === null || c === undefined ? '' : c).trim() === ''; })) return;
+      var v = function (c) { return col[c] === undefined ? '' : String(r[col[c]] === undefined || r[col[c]] === null ? '' : r[col[c]]).trim(); };
+      var codice = v('codice');
+      if (/^\d+\.0+$/.test(codice)) codice = codice.replace(/\.0+$/, '');
+      if (!codice) { scartati.push({ riga: riga, codice: '', motivo: 'codice mancante' }); return; }
+      var indirizzo = componiIndirizzo(v);
+      if (!pv[codice]) {
+        if (!indirizzo) { scartati.push({ riga: riga, codice: codice, motivo: 'indirizzo mancante' }); return; }
+        pv[codice] = { riga: riga, codice: codice, nome: v('nome').replace(/\s+/g, ' '), indirizzo: indirizzo, pos: null, pallet: null, consegne: null };
+        ordine.push(codice);
+      } else if (pv[codice].indirizzo !== indirizzo) {
+        avvisi.push({ riga: riga, codice: codice, motivo: 'indirizzo diverso da quello della riga ' + pv[codice].riga + ': usato il primo' });
+      }
+      var reparto = normReparto(v('reparto'));
+      var aggiungi = function (data, valore) {
+        var t = String(valore === null || valore === undefined ? '' : valore).trim();
+        if (t === '') return;
+        var n;
+        try { n = num(t, 'colli'); } catch (e) { scartati.push({ riga: riga, codice: codice, motivo: 'quantità non numerica "' + t + '" il ' + data + ' (' + reparto + '): ignorata' }); return; }
+        if (n < 0) { scartati.push({ riga: riga, codice: codice, motivo: 'quantità negativa il ' + data + ': ignorata' }); return; }
+        if (n === 0) return;
+        var chiave = codice + '|' + data + '|' + reparto;
+        carichi[chiave] = carichi[chiave] || { pv: codice, data: data, reparto: reparto, colli: 0 };
+        carichi[chiave].colli += n;
+      };
+      if (colonneData.length) colonneData.forEach(function (cd) { aggiungi(cd.data, r[cd.indice]); });
+      else {
+        var d = leggiData(r[col.data]);
+        if (!d) { scartati.push({ riga: riga, codice: codice, motivo: 'data non valida "' + v('data') + '"' }); return; }
+        aggiungi(d, r[col.colli]);
+      }
+    });
+    var lista = Object.keys(carichi).map(function (k) { return carichi[k]; });
+    var conCarichi = {};
+    lista.forEach(function (c) { conCarichi[c.pv] = true; });
+    var validi = ordine.map(function (c) { return pv[c]; });
+    validi.filter(function (p) { return !conCarichi[p.codice]; }).forEach(function (p) {
+      avvisi.push({ riga: p.riga, codice: p.codice, motivo: 'nessun carico nel periodo: il PV viene importato ma non entra nei totali' });
+    });
+    var date = {}; lista.forEach(function (c) { date[c.data] = true; });
+    var reparti = {}; lista.forEach(function (c) { reparti[c.reparto] = true; });
+    return { tipo: 'giornaliero', validi: validi, carichi: lista, scartati: scartati, avvisi: avvisi, colonne: col,
+      date: Object.keys(date).sort(), reparti: Object.keys(reparti).sort() };
+  }
+
+  /** Righe grezze (array di array) -> {tipo, validi, scartati, ...}. Riconosce l'anagrafica con volumi e i carichi giornalieri. */
   function preparaImport(righe) {
-    var iHdr = righe.findIndex(function (r) { return r && r.some(function (c) { return String(c).trim() !== ''; }); });
+    var iHdr = righe.findIndex(function (r) { return r && r.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }) && mappaColonne(r).codice !== undefined; });
+    if (iHdr < 0) iHdr = righe.findIndex(function (r) { return r && r.some(function (c) { return String(c == null ? '' : c).trim() !== ''; }); });
     if (iHdr < 0) throw new Error('Il file è vuoto.');
     var col = mappaColonne(righe[iHdr]);
+    var colonneData = [];
+    righe[iHdr].forEach(function (h, i) { var d = leggiData(h); if (d) colonneData.push({ indice: i, data: d }); });
+    if (col.codice !== undefined && (colonneData.length || (col.data !== undefined && col.colli !== undefined))) {
+      if (col.indirizzo === undefined && col.comune === undefined) throw new Error('Colonne non riconosciute: indirizzo. Intestazioni trovate: ' + righe[iHdr].join(' | '));
+      return preparaGiornaliero(righe, iHdr, col, colonneData);
+    }
     var mancano = ['codice', 'pallet', 'consegne'].filter(function (c) { return col[c] === undefined; });
     if (col.indirizzo === undefined && col.comune === undefined && col.lat === undefined && col.coordinate === undefined) mancano.push('indirizzo');
     if (mancano.length) throw new Error('Colonne non riconosciute: ' + mancano.join(', ') + '. Intestazioni trovate: ' + righe[iHdr].join(' | '));
@@ -240,13 +371,7 @@
         if (/^\d+\.0+$/.test(codice)) codice = codice.replace(/\.0+$/, '');
         if (!codice) throw new Error('codice mancante');
         if (visti[codice]) throw new Error('codice duplicato (anche alla riga ' + visti[codice] + ')');
-        var indirizzo = v('indirizzo').replace(/\s+/g, ' ');
-        var extra = [v('cap'), v('comune'), v('provincia') ? '(' + v('provincia').toUpperCase() + ')' : ''].filter(Boolean).join(' ');
-        // aggiunge CAP/comune/provincia salvo che l'indirizzo li contenga già (", Comune" o il CAP)
-        var com = v('comune'), cap = v('cap');
-        var giaPresente = (cap && indirizzo.indexOf(cap) >= 0) ||
-          (com && new RegExp(',\\s*(\\d{5}\\s+)?' + com.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(indirizzo));
-        if (extra && !giaPresente) indirizzo = indirizzo ? indirizzo + ', ' + extra : extra;
+        var indirizzo = componiIndirizzo(v);
         var pos = null;
         if (v('coordinate')) pos = leggiCoordinate(v('coordinate'));
         else if (v('lat') && v('lng')) pos = leggiCoordinate(v('lat') + ', ' + v('lng'));
@@ -261,7 +386,7 @@
         scartati.push({ riga: riga, codice: v('codice'), motivo: e.message });
       }
     });
-    return { validi: validi, scartati: scartati, colonne: col };
+    return { tipo: 'anagrafica', validi: validi, scartati: scartati, avvisi: [], colonne: col };
   }
 
   /** CSV -> array di righe. Separatore rilevato (; , tab), virgolette gestite, BOM rimosso. */
@@ -296,6 +421,7 @@
     CODICI_SEDI: CODICI_SEDI, num: num, validaParametri: validaParametri, leggiCoordinate: leggiCoordinate,
     chiaveCoord: chiaveCoord, metriche: metriche, delta: delta, weiszfeld: weiszfeld, pesiOttimo: pesiOttimo,
     tabella: tabella, riepilogo: riepilogo, estrazione: estrazione, csv: csv, mappaColonne: mappaColonne,
-    preparaImport: preparaImport, leggiCSV: leggiCSV, aBlocchi: aBlocchi, arr: arr
+    preparaImport: preparaImport, leggiCSV: leggiCSV, aBlocchi: aBlocchi, arr: arr,
+    volumePV: volumePV, volumi: volumi, leggiData: leggiData, pulisciIndirizzo: pulisciIndirizzo, normReparto: normReparto
   };
 });

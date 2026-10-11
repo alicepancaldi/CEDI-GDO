@@ -313,3 +313,60 @@ test('sessione scaduta o funzione non pubblicata: errore leggibile', async () =>
   row.querySelector('.sInd').value = 'Via Emilia 1, Bologna'; row.querySelector('.sSalva').click();
   await p.attendiMsg(/Servizio distanze non raggiungibile \(funzione "ors" pubblicata\?\)/);
 });
+
+test('carichi giornalieri: import formato Megamark, fattori colli→pallet, viaggi giorno per giorno', async () => {
+  const p = apriPagina({ sessione: { user: { email: 'alice@esempio.it' }, access_token: 'jwt-valido' } });
+  const { $, d, w, S } = p;
+  await p.finche(() => p.libero() && $('pEuroKm').value, 'avvio');
+  p.tab('conf');
+  const row = d.querySelectorAll('#sediForm .sede')[0];
+  row.querySelector('.sInd').value = 'Via Emilia 1, Bologna'; row.querySelector('.sSalva').click();
+  await p.attendiMsg(/salvata/);
+  // un PV già esistente inserito a mano, che ora arriva anche nei carichi
+  S.db.punti_vendita.push({ codice: '500', nome: 'vecchio', indirizzo: 'Via Modena 10, 41121 Modena (MO)', lat: 44.6471, lng: 10.9252, pallet_settimana: 10, consegne_settimana: 2, geocodifica: 'address' });
+  $('btnRicarica').click(); await p.attendiMsg(/Dati aggiornati/);
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('LOGISTICA ');
+  ws.addRow(['INTERPORTO BARI', 'LOGISTICA AGGIORNATA']);
+  ws.addRow(['codcli', 'RAGIONE   SOCIALE', 'INDIRIZZO', 'CITTA', 'PROVINCIA_RIC', 'mag', 'LUN', new Date(Date.UTC(2026, 2, 3)), new Date(Date.UTC(2026, 2, 4))]);
+  ws.addRow([500, 'MODENA SRL   ', 'Via Modena 10', 'Modena', 'MO', 'ortofrutta', 'X', 600, 800]);
+  ws.addRow([500, 'MODENA SRL   ', 'Via Modena 10', 'Modena', 'MO', 'carne', 'X', 300, 300]);
+  ws.addRow([501, 'CARPI SRL', 'Via Carpi 1, S.N.', 'Carpi', 'MO', 'ortofrutta', 'X', 330, 'X']);
+  await p.caricaFile('LOGISTICA MEGA.xlsx', new Uint8Array(await wb.xlsx.writeBuffer()));
+  await p.attendiMsg(/controllare l'anteprima/);
+  assert.match($('anteprima').textContent, /Carichi giornalieri: 2 punti vendita \(1 nuovi\), 5 righe di carico, 2 giorni \(2026-03-03 – 2026-03-04\), reparti: carne, ortofrutta/);
+  assert.match($('anteprima').textContent, /non numerica "X"/);
+  // carichi vecchi da sostituire
+  S.db.carichi.push({ pv: '500', data: '2025-01-01', reparto: 'vecchio', colli: 1 });
+  $('btnConfermaImport').click();
+  await p.attendiMsg(/Import completato/);
+  assert.strictEqual(S.db.carichi.length, 5, 'carichi vecchi sostituiti');
+  assert.deepStrictEqual(S.db.reparti.map(r => r.reparto).sort(), ['carne', 'ortofrutta']);
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '501').indirizzo, 'Via Carpi 1, Carpi (MO)');
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '500').pallet_settimana, 10, 'valori manuali conservati');
+  assert.match($('repartiForm').textContent, /Mancano i fattori di conversione per: carne, ortofrutta/);
+  // fattori: 30 colli per pallet -> PV 500: giorno 1 = 30 pallet (1 viaggio), giorno 2 = 36,67 (2 viaggi)
+  d.querySelectorAll('#repartiForm .rFatt').forEach(i => { i.value = '30'; });
+  d.getElementById('btnReparti').click();
+  await p.attendiMsg(/Fattori di conversione salvati/);
+  assert.deepStrictEqual(S.db.reparti.map(r => r.colli_per_pallet), [30, 30]);
+  p.tab('riep'); $('btnDist').click();
+  await p.attendiMsg(/Distanze aggiornate/);
+  const st = w.__simulatore.stato;
+  const pv500 = st.pv.find(x => x.codice === '500');
+  const km = S.db.distanze.find(x => x.pv === '500').km;
+  const m = C.metriche(pv500, st.sedi.ATTUALE, { km, minuti: 1 }, st.P);
+  assert.strictEqual(Math.round(m.viaggiSett), 9, '3 viaggi in 2 giorni = 9 a settimana su 6 giorni');
+  const righe = [...d.querySelectorAll('#riepilogo tbody tr')];
+  assert.strictEqual(righe[0].cells[1].textContent, fmtIt(9 + 3)); // PV 501: 330 colli = 11 pallet in 1 giorno -> 1 viaggio -> 3/sett
+  assert.match($('riepilogo').textContent, /Volumi dai carichi giornalieri: 2 giorni/);
+  // pagina del PV: volumi dai carichi
+  p.tab('pv'); p.set('pvCerca', '500'); $('pvCerca').dispatchEvent(new w.Event('change'));
+  await p.finche(() => p.libero() && /dai carichi giornalieri/.test($('confronto').textContent), 'confronto 500');
+  // svuotare pallet e consegne è consentito per un PV con carichi
+  p.set('pvPallet', ''); p.set('pvConsegne', ''); $('btnSalvaPV').click();
+  await p.attendiMsg(/500 salvato/);
+  assert.strictEqual(S.db.punti_vendita.find(x => x.codice === '500').pallet_settimana, null);
+  assert.deepStrictEqual(p.errori, []);
+});
+
+function fmtIt(n) { return Number(n).toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }

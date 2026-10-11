@@ -17,6 +17,8 @@ const LUOGHI = {
   'Interporto, Bentivoglio': [44.6370, 11.4070, 'venue'],
   'Via Modena 10, 41121 Modena (MO)': [44.6471, 10.9252, 'address'],
   'Via Carpi 1, 41012 Carpi (MO)': [44.7842, 10.8851, 'address'],
+  'Via Carpi 1, Carpi (MO)': [44.7842, 10.8851, 'address'],
+  'Via Modena 10, Modena (MO)': [44.6471, 10.9252, 'address'],
   'Via Sassuolo 2, 41049 Sassuolo (MO)': [44.5446, 10.7836, 'street'],
   'Corso Vignola, 41058 Vignola (MO)': [44.4810, 11.0012, 'locality'],
   'Castel San Pietro Terme': [44.3976, 11.5876, 'locality'],
@@ -94,11 +96,11 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
   const sedi = ['ATTUALE', 'OPZ1', 'OPZ2', 'OPZ3', 'OTTIMO'];
   const nomi = { ATTUALE: 'CEDI attuale', OPZ1: 'Opzione 1', OPZ2: 'Opzione 2', OPZ3: 'Opzione 3', OTTIMO: 'Punto di ottimo' };
   const db = {
-    parametri: [{ id: 1, euro_km: 1.3, km_fatturati: 'AR', capacita_pallet: 33, costo_fisso_viaggio: 0, settimane_anno: 52 }],
+    parametri: [{ id: 1, euro_km: 1.3, km_fatturati: 'AR', capacita_pallet: 33, costo_fisso_viaggio: 0, settimane_anno: 52, giorni_settimana: 6 }],
     sedi: sedi.map(c => ({ codice: c, nome: nomi[c], indirizzo: '', lat: null, lng: null, capacita_mezzo: null, geocodifica: '' })),
-    punti_vendita: [], distanze: []
+    punti_vendita: [], distanze: [], carichi: [], reparti: []
   };
-  const pk = { parametri: ['id'], sedi: ['codice'], punti_vendita: ['codice'], distanze: ['sede', 'pv'] };
+  const pk = { parametri: ['id'], sedi: ['codice'], punti_vendita: ['codice'], distanze: ['sede', 'pv'], carichi: ['pv', 'data', 'reparto'], reparti: ['reparto'] };
   const revocati = { sedi: ['insert', 'delete'], parametri: ['insert', 'delete'] };
   const stats = { select: 0, upsert: 0, update: 0, delete: 0, invoke: 0, maxRange: 0 };
   const utenti = { 'alice@esempio.it': 'segreta' };
@@ -112,8 +114,8 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
       if (!['AR', 'A'].includes(r.km_fatturati)) e('violates check constraint km_fatturati');
     }
     if (t === 'punti_vendita') {
-      ['codice', 'indirizzo', 'lat', 'lng', 'pallet_settimana', 'consegne_settimana'].forEach(c => { if (r[c] === null || r[c] === undefined || r[c] === '') e('null value in column "' + c + '" violates not-null constraint'); });
-      if (!(r.pallet_settimana > 0) || !(r.consegne_settimana > 0)) e('violates check constraint');
+      ['codice', 'indirizzo', 'lat', 'lng'].forEach(c => { if (r[c] === null || r[c] === undefined || r[c] === '') e('null value in column "' + c + '" violates not-null constraint'); });
+      if ((r.pallet_settimana != null && !(r.pallet_settimana > 0)) || (r.consegne_settimana != null && !(r.consegne_settimana > 0))) e('violates check constraint');
       if (typeof r.lat !== 'number' || !isFinite(r.lat)) e('lat non numerica');
     }
     if (t === 'distanze') {
@@ -122,6 +124,13 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
       if (!(r.km >= 0) || !(r.minuti >= 0)) e('violates check constraint distanze_km_check');
       if (!r.chiave) e('null chiave');
     }
+    if (t === 'carichi') {
+      if (!db.punti_vendita.some(p => p.codice === r.pv)) e('violates foreign key constraint carichi_pv_fkey');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(r.data)) e('invalid input syntax for type date');
+      if (!(r.colli >= 0)) e('violates check constraint carichi_colli_check');
+    }
+    if (t === 'reparti' && r.colli_per_pallet != null && !(r.colli_per_pallet > 0)) e('violates check constraint reparti');
+    if (t === 'parametri' && r.giorni_settimana != null && !(r.giorni_settimana >= 1 && r.giorni_settimana <= 7)) e('giorni_settimana check');
     if (t === 'sedi' && r.capacita_mezzo !== null && r.capacita_mezzo !== undefined && !(r.capacita_mezzo > 0)) e('capacita check');
     Object.values(r).forEach(v => { if (v !== null && typeof v === 'object') e('valore non scalare'); if (typeof v === 'number' && !isFinite(v)) e('numero non finito'); });
   }
@@ -129,15 +138,16 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
   const clona = x => JSON.parse(JSON.stringify(x));
 
   function query(t) {
-    let op = 'select', filtri = [], ordini = [], rng = null, valori = null, conflitto = null, ritorna = false;
+    let op = 'select', filtri = [], ordini = [], rng = null, valori = null, conflitto = null, ritorna = false, ignora = false;
     const q = {
       select() { if (op !== 'select') ritorna = true; return q; },
       order(c, o) { ordini.push([c, o && o.ascending === false ? -1 : 1]); return q; },
       range(a, b) { rng = [a, b]; stats.maxRange = Math.max(stats.maxRange, b - a + 1); return q; },
       eq(c, v) { filtri.push(r => String(r[c]) === String(v)); return q; },
+      gte(c, v) { filtri.push(r => String(r[c]) >= String(v)); return q; },
       in(c, vs) { const s = vs.map(String); filtri.push(r => s.includes(String(r[c]))); return q; },
       match(o) { Object.keys(o).forEach(k => q.eq(k, o[k])); return q; },
-      upsert(righe, o) { op = 'upsert'; valori = righe; conflitto = o && o.onConflict; return q; },
+      upsert(righe, o) { op = 'upsert'; valori = righe; conflitto = o && o.onConflict; ignora = !!(o && o.ignoreDuplicates); return q; },
       update(v) { op = 'update'; valori = v; return q; },
       delete() { op = 'delete'; return q; },
       then(ok, ko) { return Promise.resolve().then(esegui).then(ok, ko); }
@@ -163,7 +173,7 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
           nuove.forEach(r => { const k = chiave(t, r); if (viste.has(k)) throw { message: 'ON CONFLICT DO UPDATE command cannot affect row a second time' }; viste.add(k); verifica(t, r); });
           nuove.forEach(r => {
             const i = db[t].findIndex(x => chiave(t, x) === chiave(t, r));
-            if (i >= 0) db[t][i] = Object.assign(db[t][i], r); else db[t].push(r);
+            if (i >= 0) { if (!ignora) db[t][i] = Object.assign(db[t][i], r); } else db[t].push(Object.assign(t === 'reparti' ? { colli_per_pallet: null } : {}, r));
           });
           return { data: null, error: null };
         }
@@ -180,7 +190,7 @@ function creaSupabaseFinto(gestoreOrs, opz = {}) {
           if (!filtri.length) throw { message: 'DELETE requires a WHERE clause' };
           const via = db[t].filter(x => filtri.every(f => f(x)));
           db[t] = db[t].filter(x => !via.includes(x));
-          if (t === 'punti_vendita') { const c = via.map(p => p.codice); db.distanze = db.distanze.filter(d => !c.includes(d.pv)); }
+          if (t === 'punti_vendita') { const c = via.map(p => p.codice); db.distanze = db.distanze.filter(d => !c.includes(d.pv)); db.carichi = db.carichi.filter(d => !c.includes(d.pv)); }
           return { data: null, error: null };
         }
       } catch (e) { return { data: null, error: { message: e.message || String(e) } }; }

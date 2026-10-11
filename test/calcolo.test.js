@@ -122,3 +122,73 @@ test('import: riconoscimento colonne grezze, composizione indirizzo, scarti', ()
   const coord = C.preparaImport([['codice', 'lat', 'lon', 'pallet', 'consegne'], ['A', '44.5', '11.3', '5', '1']]);
   assert.deepStrictEqual(coord.validi[0].pos, { lat: 44.5, lng: 11.3 });
 });
+
+test('carichi giornalieri: viaggi giorno per giorno, non sulla media', () => {
+  // 2 giorni: 30 e 40 pallet; mezzo da 33 -> 1 + 2 = 3 viaggi (con la media 35/giorno sarebbero 4)
+  const carichi = [
+    { pv: 'A', data: '2026-03-03', reparto: 'ortofrutta', colli: 600 }, { pv: 'A', data: '2026-03-03', reparto: 'carne', colli: 300 },   // 20 + 10 = 30 pallet
+    { pv: 'A', data: '2026-03-04', reparto: 'ortofrutta', colli: 800 }, { pv: 'A', data: '2026-03-04', reparto: 'carne', colli: 300 }    // 26,67 + 10 = 36,67
+  ];
+  const v = C.volumi(carichi, { ortofrutta: 30, carne: 30 }, 6);
+  assert.strictEqual(v.giorni, 2); vicino(v.settimane, 2 / 6);
+  const pv = { codice: 'A', carico: v.perPV.A };
+  const m = C.metriche(pv, null, { km: 50, minuti: 40 }, P);
+  vicino(m.viaggiSett, 3 / (2 / 6));           // 9 viaggi/settimana
+  vicino(m.palletSett, (30 + 36.6666667) / (2 / 6), 1e-6);
+  vicino(m.consegneSett, 6);
+  vicino(m.costoAnno, 9 * 100 * 1.45 * 50);
+  // capacità ridotta sulla sede: 18 pallet -> 2 + 3 = 5 viaggi
+  vicino(C.metriche(pv, { capacita: 18 }, { km: 50, minuti: 40 }, P).viaggiSett, 15);
+  // fattore mancante: PV senza volumi, escluso dai totali
+  const v2 = C.volumi(carichi, { ortofrutta: 30 }, 6);
+  assert.deepStrictEqual(v2.repartiSenzaFattore, ['carne']);
+  assert.strictEqual(v2.perPV.A, null);
+  assert.strictEqual(C.metriche({ carico: null }, null, { km: 1, minuti: 1 }, P), null);
+  const sedi = { ATTUALE: { codice: 'ATTUALE', nome: 'X', lat: 41, lng: 16 }, OPZ1: { lat: null }, OPZ2: { lat: null }, OPZ3: { lat: null }, OTTIMO: { lat: null } };
+  const t = C.tabella(P, sedi, [{ codice: 'A', lat: 41.1, lng: 16.1, carico: null }], []);
+  assert.strictEqual(t.senzaVolumi.length, 1); assert.strictEqual(t.righe.length, 0);
+});
+
+test('pulizia indirizzi e lettura date', () => {
+  assert.strictEqual(C.pulisciIndirizzo('VIA ARNALDO SPALTRO,S.N.'), 'VIA ARNALDO SPALTRO');
+  assert.strictEqual(C.pulisciIndirizzo('VIALE PITAGORA, S.N.C.'), 'VIALE PITAGORA');
+  assert.strictEqual(C.pulisciIndirizzo('VIA MARCONI ANG. DE GASPERI, N.C.'), 'VIA MARCONI');
+  assert.strictEqual(C.pulisciIndirizzo('  VIA   SNOOPY 3 '), 'VIA SNOOPY 3');
+  assert.strictEqual(C.pulisciIndirizzo("CIRCONVALLAZ. CONCA D'ORO 145"), "CIRCONVALLAZ. CONCA D'ORO 145");
+  assert.strictEqual(C.leggiData(new Date('2026-03-02T00:00:00Z')), '2026-03-02');
+  assert.strictEqual(C.leggiData('2/3/2026'), '2026-03-02');
+  assert.strictEqual(C.leggiData('2026-03-04T00:00:00.000Z'), '2026-03-04');
+  assert.strictEqual(C.leggiData('LUN'), null);
+});
+
+test('import carichi giornalieri formato largo (riga titolo, una riga per reparto, colonne-data)', () => {
+  const righe = [
+    ['INTERPORTO', 'LOGISTICA AGGIORNATA'],
+    ['codcli', 'RAGIONE   SOCIALE', 'INDIRIZZO', 'CITTA', 'PROVINCIA_RIC', 'mag', 'INSEGNA', 'LUN', 'MAR', '2026-03-02', '2026-03-03', '2026-03-04'],
+    [100, 'ALFA SRL      ', 'VIA ROMA, S.N.', 'BARI', 'BA', 'ortofrutta', 'DOK', 'X', 'X', '', 30, 40],
+    [100, 'ALFA SRL      ', 'VIA ROMA, S.N.', 'BARI', 'BA', 'carne', 'DOK', 'X', '', '', 5, 'X'],
+    [100, 'ALFA SRL      ', 'VIA ROMA, S.N.', 'BARI', 'BA', 'surgelati ', 'DOK', 'X', '', '', '', ''],
+    [200, 'BETA', 'VIA MARE 2', 'MOLFETTA', 'BA', 'ortofrutta', 'A&O', 'X', 'X', '', '', ''],
+    ['', '', '', '', '', '', '', '', '', '', '', '']
+  ];
+  const p = C.preparaImport(righe);
+  assert.strictEqual(p.tipo, 'giornaliero');
+  assert.deepStrictEqual(p.validi.map(v => [v.codice, v.nome, v.indirizzo]), [['100', 'ALFA SRL', 'VIA ROMA, BARI (BA)'], ['200', 'BETA', 'VIA MARE 2, MOLFETTA (BA)']]);
+  assert.deepStrictEqual(p.date, ['2026-03-03', '2026-03-04']);
+  assert.deepStrictEqual(p.reparti, ['carne', 'ortofrutta']);
+  assert.strictEqual(p.carichi.length, 3);
+  assert.match(p.scartati[0].motivo, /non numerica "X" il 2026-03-04 \(carne\)/);
+  assert.match(p.avvisi.find(a => a.codice === '200').motivo, /nessun carico/);
+});
+
+test('import carichi giornalieri formato lungo (data + colli)', () => {
+  const p = C.preparaImport([
+    ['Codice cliente', 'Ragione sociale', 'Indirizzo', 'Comune', 'Prov', 'Reparto', 'Data', 'Colli'],
+    ['A1', 'Uno', 'Via A 1', 'Bari', 'BA', 'Ortofrutta', '03/03/2026', '12'],
+    ['A1', 'Uno', 'Via A 1', 'Bari', 'BA', 'ortofrutta', '03/03/2026', '8'],
+    ['A1', 'Uno', 'Via A 1', 'Bari', 'BA', 'carne', 'ieri', '8']
+  ]);
+  assert.strictEqual(p.tipo, 'giornaliero');
+  assert.deepStrictEqual(p.carichi, [{ pv: 'A1', data: '2026-03-03', reparto: 'ortofrutta', colli: 20 }]);
+  assert.match(p.scartati[0].motivo, /data non valida/);
+});

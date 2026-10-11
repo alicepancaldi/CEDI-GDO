@@ -83,6 +83,7 @@
         <label>Capacità mezzo standard (pallet)<input id="pCap" inputmode="decimal"></label>
         <label>Costo fisso per viaggio €<input id="pFisso" inputmode="decimal"></label>
         <label>Settimane operative / anno<input id="pSett" inputmode="decimal"></label>
+        <label>Giorni lavorativi / settimana<input id="pGiorni" inputmode="decimal"></label>
       </div>
       <button class="btn" id="btnParam">Salva parametri</button>
     </div>
@@ -97,8 +98,15 @@
       </div>
     </div>
     <div class="card">
-      <h2>Importa punti vendita da Excel o CSV</h2>
-      <p class="muted">Colonne riconosciute (prima riga = intestazione): codice, nome, indirizzo (oppure indirizzo + CAP + comune + provincia), pallet/settimana, consegne/settimana; facoltative latitudine e longitudine. I PV con lo stesso codice vengono aggiornati.</p>
+      <h2>Conversione colli → pallet</h2>
+      <div id="repartiForm"></div>
+    </div>
+    <div class="card">
+      <h2>Importa punti vendita e carichi da Excel o CSV</h2>
+      <p class="muted">Due formati riconosciuti automaticamente (prima riga utile = intestazione):<br>
+        <b>Carichi giornalieri</b> — codice cliente, ragione sociale, indirizzo, città, provincia, reparto, e una colonna per ogni data con i colli (oppure colonne "data" e "colli"). Il carico di un giorno è la somma dei reparti.<br>
+        <b>Anagrafica con volumi</b> — codice, nome, indirizzo (o indirizzo + CAP + comune + provincia), pallet/settimana, consegne/settimana; facoltative latitudine e longitudine.<br>
+        I PV con lo stesso codice vengono aggiornati.</p>
       <input type="file" id="fileImport" accept=".xlsx,.csv,.txt">
       <div id="anteprima"></div>
     </div>

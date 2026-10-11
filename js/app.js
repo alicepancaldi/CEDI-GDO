@@ -10,7 +10,7 @@
   var BLOCCO_DB = 500;
 
   var sb = null;
-  var S = { P: null, sedi: {}, pv: [], dist: [], ultimiErroriDist: [], importPronto: null };
+  var S = { P: null, sedi: {}, pv: [], dist: [], carichi: [], reparti: {}, vol: null, ultimiErroriDist: [], importPronto: null };
 
   /* ============================ utilità ============================ */
   function $(id) { return document.getElementById(id); }
@@ -66,9 +66,9 @@
     }
     return out;
   }
-  async function upsert(tabella, righe, conflitto) {
+  async function upsert(tabella, righe, conflitto, soloNuove) {
     for (var i = 0; i < righe.length; i += BLOCCO_DB) {
-      var r = await sb.from(tabella).upsert(righe.slice(i, i + BLOCCO_DB), { onConflict: conflitto });
+      var r = await sb.from(tabella).upsert(righe.slice(i, i + BLOCCO_DB), { onConflict: conflitto, ignoreDuplicates: !!soloNuove });
       if (r.error) throw errDb(r.error);
     }
   }
@@ -85,7 +85,8 @@
 
   function daDbPV(r) {
     return { codice: String(r.codice), nome: r.nome || '', indirizzo: r.indirizzo || '', lat: Number(r.lat), lng: Number(r.lng),
-      pallet: Number(r.pallet_settimana), consegne: Number(r.consegne_settimana), geocodifica: r.geocodifica || '' };
+      pallet: r.pallet_settimana == null ? null : Number(r.pallet_settimana), consegne: r.consegne_settimana == null ? null : Number(r.consegne_settimana),
+      geocodifica: r.geocodifica || '', carico: null };
   }
   function aDbPV(p) {
     return { codice: p.codice, nome: p.nome, indirizzo: p.indirizzo, lat: p.lat, lng: p.lng, pallet_settimana: p.pallet,
@@ -93,11 +94,26 @@
   }
   function ordinaPV() { S.pv.sort(function (a, b) { return a.codice.localeCompare(b.codice, 'it', { numeric: true }); }); }
 
+  /** Converte i carichi giornalieri in volumi (pallet) e li collega ai PV. */
+  function ricalcolaVolumi() {
+    var fattori = {};
+    Object.keys(S.reparti).forEach(function (k) { fattori[k] = S.reparti[k]; });
+    S.vol = S.carichi.length ? C.volumi(S.carichi, fattori, S.P.giorni_settimana) : null;
+    var conCarichi = {};
+    S.carichi.forEach(function (c) { conCarichi[c.pv] = true; });
+    S.pv.forEach(function (p) {
+      p.haCarichi = !!conCarichi[p.codice];
+      p.carico = S.vol && S.vol.perPV[p.codice] ? S.vol.perPV[p.codice] : null;
+    });
+  }
+
   async function caricaDati() {
-    var r = await Promise.all([leggiTutto('parametri', ['id']), leggiTutto('sedi', ['codice']), leggiTutto('punti_vendita', ['codice']), leggiTutto('distanze', ['pv', 'sede'])]);
+    var r = await Promise.all([leggiTutto('parametri', ['id']), leggiTutto('sedi', ['codice']), leggiTutto('punti_vendita', ['codice']), leggiTutto('distanze', ['pv', 'sede']),
+      leggiTutto('carichi', ['pv', 'data', 'reparto']), leggiTutto('reparti', ['reparto'])]);
     if (!r[0].length) throw new Error('Tabella "parametri" vuota: eseguire supabase/schema.sql.');
     var p = r[0][0];
-    S.P = { euro_km: Number(p.euro_km), km_fatturati: p.km_fatturati, capacita_pallet: Number(p.capacita_pallet), costo_fisso_viaggio: Number(p.costo_fisso_viaggio), settimane_anno: Number(p.settimane_anno) };
+    S.P = { euro_km: Number(p.euro_km), km_fatturati: p.km_fatturati, capacita_pallet: Number(p.capacita_pallet), costo_fisso_viaggio: Number(p.costo_fisso_viaggio),
+      settimane_anno: Number(p.settimane_anno), giorni_settimana: p.giorni_settimana == null ? 6 : Number(p.giorni_settimana) };
     S.sedi = {};
     r[1].forEach(function (s) {
       S.sedi[s.codice] = { codice: s.codice, nome: s.nome, indirizzo: s.indirizzo || '', lat: s.lat == null ? null : Number(s.lat), lng: s.lng == null ? null : Number(s.lng),
@@ -106,6 +122,11 @@
     C.CODICI_SEDI.forEach(function (c) { if (!S.sedi[c]) throw new Error('Sede ' + c + ' mancante: eseguire supabase/schema.sql.'); });
     S.pv = r[2].map(daDbPV); ordinaPV();
     S.dist = r[3].map(function (d) { return { sede: d.sede, pv: String(d.pv), km: Number(d.km), minuti: Number(d.minuti), chiave: d.chiave }; });
+    S.carichi = r[4].map(function (c) { return { pv: String(c.pv), data: String(c.data).slice(0, 10), reparto: c.reparto, colli: Number(c.colli) }; });
+    S.reparti = {};
+    r[5].forEach(function (x) { S.reparti[x.reparto] = x.colli_per_pallet == null ? null : Number(x.colli_per_pallet); });
+    S.carichi.forEach(function (c) { if (!(c.reparto in S.reparti)) S.reparti[c.reparto] = null; });
+    ricalcolaVolumi();
   }
 
   /* ============================ OpenRouteService (via funzione Supabase) ============================ */
@@ -215,6 +236,8 @@
     $('pCap').value = fmt(p.capacita_pallet, 0).replace(/\./g, '');
     $('pFisso').value = fmt(p.costo_fisso_viaggio, 2).replace(/\./g, '');
     $('pSett').value = p.settimane_anno;
+    $('pGiorni').value = p.giorni_settimana;
+    disegnaReparti();
     $('pvLista').innerHTML = S.pv.map(function (x) { return '<option value="' + esc(x.codice) + '">' + esc(x.nome) + '</option>'; }).join('');
     $('sediForm').innerHTML = ['ATTUALE', 'OPZ1', 'OPZ2', 'OPZ3'].map(function (c) {
       var s = S.sedi[c], pr = s.lat != null ? precisione(s.geocodifica) : null;
@@ -230,12 +253,40 @@
     if (schedaCorrente === 'riep') disegnaRiepilogo();
   }
 
+  function disegnaReparti() {
+    var nomi = Object.keys(S.reparti).sort();
+    var v = S.vol;
+    var h = v ? '<p class="muted">Carichi giornalieri: ' + S.carichi.length + ' righe, ' + v.giorni + ' giorni dal ' + esc(v.dal) + ' al ' + esc(v.al) +
+      ' (' + fmt(v.settimane, 2) + ' settimane con ' + fmt(S.P.giorni_settimana, 0) + ' giorni lavorativi).</p>' : '<p class="muted">Nessun carico giornaliero importato.</p>';
+    if (nomi.length) {
+      h += '<div class="grid">' + nomi.map(function (n) {
+        return '<label>' + esc(n) + ' — colli per pallet<input class="rFatt" data-reparto="' + esc(n) + '" inputmode="decimal" value="' + (S.reparti[n] == null ? '' : String(S.reparti[n]).replace('.', ',')) + '"></label>';
+      }).join('') + '</div><button class="btn" id="btnReparti">Salva fattori</button>';
+    }
+    if (v && v.repartiSenzaFattore.length) h += '<div class="alert warn">Mancano i fattori di conversione per: ' + v.repartiSenzaFattore.map(esc).join(', ') + '. Finché mancano, i PV con quei reparti non entrano nei calcoli.</div>';
+    $('repartiForm').innerHTML = h;
+  }
+  $('repartiForm').addEventListener('click', function (ev) {
+    if (ev.target.id !== 'btnReparti') return;
+    esegui(async function () {
+      var righe = Array.prototype.map.call(document.querySelectorAll('#repartiForm .rFatt'), function (i) {
+        var t = i.value.trim(), f = t === '' ? null : C.num(t, 'colli per pallet (' + i.dataset.reparto + ')');
+        if (f !== null && !(f > 0)) throw new Error('Il fattore per ' + i.dataset.reparto + ' deve essere maggiore di zero.');
+        return { reparto: i.dataset.reparto, colli_per_pallet: f, aggiornato_il: new Date().toISOString() };
+      });
+      await upsert('reparti', righe, 'reparto');
+      righe.forEach(function (r) { S.reparti[r.reparto] = r.colli_per_pallet; });
+      ricalcolaVolumi(); disegnaTutto();
+      msg('Fattori di conversione salvati.', 'ok');
+    }).catch(function () {});
+  });
+
   /* ============================ maschera 1 ============================ */
   var pvCorrente = null;
   function compilaPV(p) {
     pvCorrente = p || null;
     $('pvCodice').value = p ? p.codice : ''; $('pvNome').value = p ? p.nome : ''; $('pvIndirizzo').value = p ? p.indirizzo : '';
-    $('pvPallet').value = p ? String(p.pallet).replace('.', ',') : ''; $('pvConsegne').value = p ? String(p.consegne).replace('.', ',') : '';
+    $('pvPallet').value = p && p.pallet != null ? String(p.pallet).replace('.', ',') : ''; $('pvConsegne').value = p && p.consegne != null ? String(p.consegne).replace('.', ',') : '';
     $('pvCoord').value = p && p.geocodifica === 'manuale' ? coordTesto(p) : '';
   }
   function trovaPV(codice) { return S.pv.filter(function (x) { return x.codice === codice; })[0]; }
@@ -253,13 +304,17 @@
       var codice = $('pvCodice').value.trim(), indirizzo = $('pvIndirizzo').value.trim().replace(/\s+/g, ' ');
       if (!codice) throw new Error('Inserire il codice del punto vendita.');
       if (!indirizzo) throw new Error('Inserire l\'indirizzo del punto vendita.');
-      var pallet = C.num($('pvPallet').value, 'pallet/settimana'), consegne = C.num($('pvConsegne').value, 'consegne/settimana');
-      if (!(pallet > 0)) throw new Error('I pallet/settimana devono essere maggiori di zero.');
-      if (!(consegne > 0)) throw new Error('Le consegne/settimana devono essere maggiori di zero.');
       var esistente = trovaPV(codice);
+      var conCarichi = esistente && esistente.haCarichi;
+      var pTxt = $('pvPallet').value.trim(), cTxt = $('pvConsegne').value.trim();
+      var pallet = conCarichi && pTxt === '' ? null : C.num(pTxt, 'pallet/settimana');
+      var consegne = conCarichi && cTxt === '' ? null : C.num(cTxt, 'consegne/settimana');
+      if (pallet !== null && !(pallet > 0)) throw new Error('I pallet/settimana devono essere maggiori di zero.');
+      if (consegne !== null && !(consegne > 0)) throw new Error('Le consegne/settimana devono essere maggiori di zero.');
       if (esistente && (!pvCorrente || pvCorrente.codice !== codice) && !window.confirm('Il codice ' + codice + ' esiste già. Sovrascrivere i suoi dati?')) throw new Error('Salvataggio annullato.');
       var pos = await posizione(indirizzo, $('pvCoord').value, esistente);
-      var pv = { codice: codice, nome: $('pvNome').value.trim(), indirizzo: indirizzo, lat: pos.lat, lng: pos.lng, pallet: pallet, consegne: consegne, geocodifica: pos.geocodifica };
+      var pv = { codice: codice, nome: $('pvNome').value.trim(), indirizzo: indirizzo, lat: pos.lat, lng: pos.lng, pallet: pallet, consegne: consegne, geocodifica: pos.geocodifica,
+        carico: esistente ? esistente.carico : null, haCarichi: !!conCarichi };
       await upsert('punti_vendita', [aDbPV(pv)], 'codice');
       if (esistente && !vicine(pv, esistente)) { await elimina('distanze', 'pv', [codice]); S.dist = S.dist.filter(function (d) { return d.pv !== codice; }); }
       S.pv = S.pv.filter(function (x) { return x.codice !== codice; }).concat([pv]); ordinaPV();
@@ -278,6 +333,7 @@
     esegui(async function () {
       await elimina('punti_vendita', 'codice', [c]);
       S.pv = S.pv.filter(function (x) { return x.codice !== c; }); S.dist = S.dist.filter(function (d) { return d.pv !== c; });
+      S.carichi = S.carichi.filter(function (x) { return x.pv !== c; }); ricalcolaVolumi();
       disegnaTutto(); $('pvCerca').value = ''; compilaPV(null);
       $('confronto').innerHTML = '<span class="muted">Inserisci o cerca un punto vendita per vedere il confronto.</span>';
       msg('Punto vendita ' + esc(c) + ' eliminato.', 'ok');
@@ -304,6 +360,7 @@
     var righe = [
       ['Km stradali mezzi pesanti (andata)', function (c) { return c.m ? fmt(c.m.km, 1) : '—'; }],
       ['Tempo di guida (andata)', function (c) { return c.m ? fmt(c.m.minuti, 0) + ' min' : '—'; }],
+      ['Pallet / settimana', function (c) { return c.m ? fmt(c.m.palletSett, 1) : '—'; }],
       ['Viaggi / settimana', function (c) { return c.m ? fmt(c.m.viaggiSett, 1) : '—'; }],
       ['Costo per viaggio', function (c) { return c.m ? eur(c.m.costoViaggio, 2) : '—'; }],
       ['Costo / settimana', function (c) { return c.m ? eur(c.m.costoSett, 0) : '—'; }],
@@ -315,9 +372,11 @@
       ['Δ % costo', function (c) { return c.delta && c.delta.pct != null ? segno(c.delta.pct, 1, ' %') : ''; }]
     ];
     var pr = precisione(pv.geocodifica);
+    var vol = C.volumePV(pv, S.P.capacita_pallet);
+    var testoVol = vol ? fmt(vol.palletSett, 1) + ' pallet/settimana in ' + fmt(vol.consegneSett, 1) + ' consegne' + (pv.carico ? ' (dai carichi giornalieri)' : '')
+      : '<span class="avviso">volumi non calcolabili' + (pv.haCarichi ? ': mancano i fattori di conversione colli → pallet' : ': inserire pallet e consegne a settimana') + '</span>';
     var h = '<h2>' + esc(pv.codice + (pv.nome ? ' – ' + pv.nome : '')) + '</h2>' +
-      '<p class="muted">' + esc(pv.indirizzo) + ' · <span class="' + (pr.livello === 'ok' ? '' : 'avviso') + '">' + esc(pr.testo) + '</span> · ' +
-      fmt(pv.pallet, 1) + ' pallet/settimana in ' + fmt(pv.consegne, 1) + ' consegne</p>' +
+      '<p class="muted">' + esc(pv.indirizzo) + ' · <span class="' + (pr.livello === 'ok' ? '' : 'avviso') + '">' + esc(pr.testo) + '</span> · ' + testoVol + '</p>' +
       '<div class="scroll"><table><thead><tr><th></th>' + col.map(function (c) {
         return '<th>' + esc(c.nome) + '<span class="sub">' + esc(c.indirizzo) + '</span></th>';
       }).join('') + '</tr></thead><tbody>' + righe.map(function (rg) {
@@ -334,8 +393,11 @@
     var ries = C.riepilogo(S.P, S.sedi, t);
     if (!ries.length) { $('riepilogo').innerHTML = '<span class="muted">Nessuna sede configurata.</span>'; $('qualita').innerHTML = ''; return; }
     var mancanti = ries.reduce(function (s, x) { return s + x.mancanti; }, 0);
-    var h = '<p class="muted">' + S.pv.length + ' punti vendita · tariffa ' + fmt(S.P.euro_km, 2) + ' €/km ' +
+    var h = '<p class="muted">' + S.pv.length + ' punti vendita (' + t.righe.length + ' con volumi) · tariffa ' + fmt(S.P.euro_km, 2) + ' €/km ' +
       (S.P.km_fatturati === 'AR' ? 'andata e ritorno' : 'solo andata') + ' · mezzo standard ' + fmt(S.P.capacita_pallet, 0) + ' pallet · ' + fmt(S.P.settimane_anno, 0) + ' settimane/anno</p>';
+    if (S.vol) h += '<p class="muted">Volumi dai carichi giornalieri: ' + S.vol.giorni + ' giorni (' + esc(S.vol.dal) + ' – ' + esc(S.vol.al) + '), riportati a settimana su ' + fmt(S.P.giorni_settimana, 0) + ' giorni lavorativi.</p>';
+    if (t.senzaVolumi.length) h += '<div class="alert warn">' + t.senzaVolumi.length + ' punti vendita esclusi dai totali perché senza volumi' +
+      (S.vol && S.vol.repartiSenzaFattore.length ? ' (mancano i fattori colli → pallet per: ' + S.vol.repartiSenzaFattore.map(esc).join(', ') + ')' : ' (nessun carico nel periodo o pallet non indicati)') + '.</div>';
     if (mancanti) h += '<div class="alert warn">Mancano ' + mancanti + ' distanze: i totali non sono ancora confrontabili. Premere "Aggiorna distanze".</div>';
     h += '<div class="scroll"><table><thead><tr><th>Sede</th><th>Viaggi / settimana</th><th>Km fatturati / settimana</th><th>Costo / anno</th>' +
       '<th>Δ costo / anno vs attuale</th><th>Δ %</th><th>Δ viaggi / settimana</th><th>Sopra l\'ottimo</th></tr></thead><tbody>' +
@@ -425,8 +487,11 @@
         costo_fisso_viaggio: $('pFisso').value.trim() === '' ? 0 : C.num($('pFisso').value, 'costo fisso'),
         settimane_anno: C.num($('pSett').value, 'settimane per anno')
       });
+      var gs = C.num($('pGiorni').value, 'giorni lavorativi a settimana');
+      if (!(gs >= 1 && gs <= 7)) throw new Error('I giorni lavorativi a settimana devono essere tra 1 e 7.');
+      p.giorni_settimana = gs;
       await aggiorna('parametri', 'id', 1, Object.assign({ aggiornato_il: new Date().toISOString() }, p));
-      S.P = p; disegnaTutto(); msg('Parametri salvati.', 'ok');
+      S.P = p; ricalcolaVolumi(); disegnaTutto(); msg('Parametri salvati.', 'ok');
     }).catch(function () {});
   });
 
@@ -529,18 +594,34 @@
       var prep = C.preparaImport(righe);
       S.importPronto = prep;
       var nuovi = prep.validi.filter(function (v) { return !trovaPV(v.codice); }).length;
-      var h = '<h3>' + esc(f.name) + '</h3><p>' + prep.validi.length + ' righe valide (' + nuovi + ' nuovi punti vendita, ' + (prep.validi.length - nuovi) + ' aggiornamenti) · ' +
-        prep.scartati.length + ' righe scartate.</p>';
+      var giorn = prep.tipo === 'giornaliero';
+      var h = '<h3>' + esc(f.name) + '</h3>';
+      if (giorn) {
+        var perPV = {};
+        prep.carichi.forEach(function (c) { var x = perPV[c.pv] = perPV[c.pv] || { giorni: {}, colli: 0 }; x.giorni[c.data] = true; x.colli += c.colli; });
+        prep.validi.forEach(function (v) { var x = perPV[v.codice]; v.nGiorni = x ? Object.keys(x.giorni).length : 0; v.colli = x ? x.colli : 0; });
+        h += '<p><b>Carichi giornalieri</b>: ' + prep.validi.length + ' punti vendita (' + nuovi + ' nuovi), ' + prep.carichi.length + ' righe di carico, ' +
+          prep.date.length + ' giorni (' + esc(prep.date[0] || '') + ' – ' + esc(prep.date[prep.date.length - 1] || '') + '), reparti: ' + prep.reparti.map(esc).join(', ') + '.</p>' +
+          '<label style="color:inherit"><input type="checkbox" id="chkSostituisci" checked style="width:auto"> Sostituisci tutti i carichi giornalieri già presenti</label>';
+      } else {
+        h += '<p>' + prep.validi.length + ' righe valide (' + nuovi + ' nuovi punti vendita, ' + (prep.validi.length - nuovi) + ' aggiornamenti) · ' + prep.scartati.length + ' righe scartate.</p>';
+      }
       if (prep.validi.length) {
-        h += '<div class="scroll"><table><thead><tr><th>Riga</th><th>Codice</th><th>Nome</th><th>Indirizzo</th><th>Pallet/sett.</th><th>Consegne/sett.</th></tr></thead><tbody>' +
-          prep.validi.slice(0, 10).map(function (v) { return '<tr><td>' + v.riga + '</td><td>' + esc(v.codice) + '</td><td class="testo">' + esc(v.nome) + '</td><td class="testo">' + esc(v.indirizzo || coordTesto(v.pos)) + '</td><td>' + fmt(v.pallet, 1) + '</td><td>' + fmt(v.consegne, 1) + '</td></tr>'; }).join('') +
+        h += '<div class="scroll"><table><thead><tr><th>Riga</th><th>Codice</th><th>Nome</th><th>Indirizzo</th>' +
+          (giorn ? '<th>Giorni con carico</th><th>Colli totali</th>' : '<th>Pallet/sett.</th><th>Consegne/sett.</th>') + '</tr></thead><tbody>' +
+          prep.validi.slice(0, 10).map(function (v) {
+            return '<tr><td>' + v.riga + '</td><td>' + esc(v.codice) + '</td><td class="testo">' + esc(v.nome) + '</td><td class="testo">' + esc(v.indirizzo || coordTesto(v.pos)) + '</td>' +
+              (giorn ? '<td>' + v.nGiorni + '</td><td>' + fmt(v.colli, 0) + '</td>' : '<td>' + fmt(v.pallet, 1) + '</td><td>' + fmt(v.consegne, 1) + '</td>') + '</tr>';
+          }).join('') +
           '</tbody></table></div>' + (prep.validi.length > 10 ? '<p class="muted">… e altre ' + (prep.validi.length - 10) + ' righe.</p>' : '') +
           '<button class="btn" id="btnConfermaImport">Importa ' + prep.validi.length + ' punti vendita</button>';
       }
-      if (prep.scartati.length) {
-        h += '<h3 class="avviso">Righe scartate</h3><div class="scroll"><table><tbody>' +
-          prep.scartati.slice(0, 20).map(function (s) { return '<tr><td>Riga ' + s.riga + '</td><td>' + esc(s.codice) + '</td><td class="testo">' + esc(s.motivo) + '</td></tr>'; }).join('') +
-          '</tbody></table></div><button class="btn sec" id="btnScarti">Scarica elenco scarti (CSV)</button>';
+      var segn = prep.scartati.concat(prep.avvisi || []);
+      prep.scartati = segn;
+      if (segn.length) {
+        h += '<h3 class="avviso">' + (giorn ? 'Segnalazioni (' + segn.length + ')' : 'Righe scartate') + '</h3><div class="scroll"><table><tbody>' +
+          segn.slice(0, 20).map(function (s) { return '<tr><td>Riga ' + s.riga + '</td><td>' + esc(s.codice) + '</td><td class="testo">' + esc(s.motivo) + '</td></tr>'; }).join('') +
+          '</tbody></table></div>' + (segn.length > 20 ? '<p class="muted">… e altre ' + (segn.length - 20) + '.</p>' : '') + '<button class="btn sec" id="btnScarti">Scarica elenco (CSV)</button>';
       }
       $('anteprima').innerHTML = h;
       msg('File letto: controllare l\'anteprima e confermare l\'import.', 'info');
@@ -555,6 +636,7 @@
     }
     if (ev.target.id !== 'btnConfermaImport') return;
     var prep = S.importPronto;
+    var sostituisci = $('chkSostituisci') ? $('chkSostituisci').checked : false;
     esegui(async function () {
       var pronti = [], problemi = [], nGeo = 0;
       for (var i = 0; i < prep.validi.length; i++) {
@@ -569,15 +651,30 @@
           if (/non raggiungibile|ORS_API_KEY/.test(e.message)) throw e;
           problemi.push({ riga: v.riga, codice: v.codice, motivo: e.message }); continue;
         }
-        var pv = { codice: v.codice, nome: v.nome, indirizzo: v.indirizzo || coordTesto(v.pos), lat: pos.lat, lng: pos.lng, pallet: v.pallet, consegne: v.consegne, geocodifica: pos.geocodifica };
+        var pv = { codice: v.codice, nome: v.nome, indirizzo: v.indirizzo || coordTesto(v.pos), lat: pos.lat, lng: pos.lng,
+          pallet: prep.tipo === 'giornaliero' ? (es ? es.pallet : null) : v.pallet, consegne: prep.tipo === 'giornaliero' ? (es ? es.consegne : null) : v.consegne,
+          geocodifica: pos.geocodifica, carico: es ? es.carico : null, haCarichi: es ? es.haCarichi : false };
         if (precisione(pv.geocodifica).livello !== 'ok') problemi.push({ riga: v.riga, codice: v.codice, motivo: 'posizione approssimata (' + precisione(pv.geocodifica).testo + ')' + (pos.etichetta ? ': ' + pos.etichetta : '') });
         pronti.push(pv);
         if (pronti.length % 50 === 0) await salvaImport(pronti.slice(-50));
       }
       await salvaImport(pronti.slice(pronti.length - pronti.length % 50)); // ultimi non ancora salvati
-      S.importProblemi = problemi;
+      var nCarichi = 0;
+      if (prep.tipo === 'giornaliero') {
+        msg('Salvataggio dei carichi giornalieri…', 'info');
+        if (sostituisci) { var rr = await sb.from('carichi').delete().gte('data', '1900-01-01'); if (rr.error) throw errDb(rr.error); }
+        var esistenti = {}; S.pv.forEach(function (p) { esistenti[p.codice] = true; });
+        var carichi = prep.carichi.filter(function (c) { return esistenti[c.pv]; });
+        await upsert('carichi', carichi, 'pv,data,reparto');
+        await upsert('reparti', prep.reparti.map(function (r) { return { reparto: r }; }), 'reparto', true);
+        nCarichi = carichi.length;
+        await caricaDati();
+      }
+      S.importProblemi = problemi.concat(prep.tipo === 'giornaliero' ? (prep.avvisi || []) : []);
+      problemi = S.importProblemi;
       disegnaTutto();
-      var h = '<p><b>Import completato:</b> ' + pronti.length + ' punti vendita salvati' + (problemi.length ? ', ' + problemi.length + ' segnalazioni.' : '.') + '</p>';
+      var h = '<p><b>Import completato:</b> ' + pronti.length + ' punti vendita salvati' + (nCarichi ? ', ' + nCarichi + ' righe di carico' : '') + (problemi.length ? ', ' + problemi.length + ' segnalazioni.' : '.') + '</p>';
+      if (S.vol && S.vol.repartiSenzaFattore.length) h += '<div class="alert warn">Inserire i fattori colli → pallet (sezione sopra) per: ' + S.vol.repartiSenzaFattore.map(esc).join(', ') + '.</div>';
       if (problemi.length) {
         h += '<div class="scroll"><table><tbody>' + problemi.slice(0, 30).map(function (s) { return '<tr><td>Riga ' + s.riga + '</td><td>' + esc(s.codice) + '</td><td class="testo">' + esc(s.motivo) + '</td></tr>'; }).join('') +
           '</tbody></table></div><button class="btn sec" id="btnProblemi">Scarica segnalazioni (CSV)</button>';

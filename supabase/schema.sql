@@ -72,3 +72,31 @@ create policy "utenti autenticati" on public.distanze      for all to authentica
 -- Le sedi non si cancellano né si creano dall'app: solo modifica
 revoke insert, delete on public.sedi from authenticated;
 revoke delete, insert on public.parametri from authenticated;
+
+-- ============ Versione 2: carichi giornalieri in colli e conversione colli → pallet ============
+-- I volumi possono arrivare come carichi giornalieri per reparto (colli); in quel caso
+-- pallet_settimana e consegne_settimana del PV non servono e restano vuoti.
+alter table public.punti_vendita alter column pallet_settimana drop not null;
+alter table public.punti_vendita alter column consegne_settimana drop not null;
+alter table public.parametri add column if not exists giorni_settimana numeric not null default 6 check (giorni_settimana >= 1 and giorni_settimana <= 7);
+
+create table if not exists public.reparti (
+  reparto          text primary key,
+  colli_per_pallet numeric check (colli_per_pallet is null or colli_per_pallet > 0),
+  aggiornato_il    timestamptz not null default now()
+);
+
+create table if not exists public.carichi (
+  pv      text not null references public.punti_vendita(codice) on delete cascade on update cascade,
+  data    date not null,
+  reparto text not null,
+  colli   numeric not null check (colli >= 0),
+  primary key (pv, data, reparto)
+);
+
+alter table public.reparti enable row level security;
+alter table public.carichi enable row level security;
+drop policy if exists "utenti autenticati" on public.reparti;
+drop policy if exists "utenti autenticati" on public.carichi;
+create policy "utenti autenticati" on public.reparti for all to authenticated using (true) with check (true);
+create policy "utenti autenticati" on public.carichi for all to authenticated using (true) with check (true);
