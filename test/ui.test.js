@@ -519,7 +519,7 @@ test('viaggi reali: import dal gestionale, tariffario, riepilogo, PV, estrazione
   assert.strictEqual(d.querySelectorAll('#dashboard .tessera').length, 2);
   assert.match($('dashboard').textContent, /2 viaggi reali dal 2026-08-01 al 2026-08-10/);
   assert.ok(d.querySelectorAll('#dashboard svg').length >= 3);
-  assert.match($('dashboard').textContent, /Interporto = 0/);
+  assert.match($('dashboard').textContent, /0 = Interporto/);
   p.tab('riep');
 
   // estrazione Excel con il foglio Viaggi
@@ -593,9 +593,9 @@ test('dashboard: più mesi, prezzo mancante, mappa', () => {
   const el = dom.window.document.getElementById('d');
   dom.window.Dashboard.disegna(el, D);
   assert.strictEqual(el.querySelectorAll('.tessera').length, 4);
-  assert.strictEqual(el.querySelectorAll('svg').length, 6);
+  assert.strictEqual(el.querySelectorAll('svg').length, 7);
   assert.match(el.textContent, /Prezzo del gasolio mancante per: lug 26/);
-  assert.match(el.textContent, /Cellamare −1,2%/);
+  assert.match(el.textContent, /−1,2%/);
   assert.ok(!/NaN|undefined/.test(el.innerHTML));
   dom.window.Dashboard.disegna(el, null);
   assert.match(el.textContent, /Importare i viaggi reali/);
